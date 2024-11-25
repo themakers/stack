@@ -1,16 +1,26 @@
-package span
+package stack_backend
 
 import (
 	"time"
 
 	"github.com/rs/xid"
-
-	"github.com/thearchitect/stack/stack_backend"
 )
 
 func GenerateID() string {
 	return xid.New().String()
 }
+
+type SpanOption interface {
+	ApplyToSpan(s *Span)
+}
+
+func SpanOptionFunc(fn func(s *Span)) SpanOption { return applyToSpanFunc(fn) }
+
+var _ SpanOption = applyToSpanFunc(func(s *Span) {})
+
+type applyToSpanFunc func(s *Span)
+
+func (a applyToSpanFunc) ApplyToSpan(s *Span) { a(s) }
 
 type Span struct {
 	ID           string
@@ -21,9 +31,9 @@ type Span struct {
 
 	Time time.Time
 
-	Attrs []stack_backend.Attr
+	Attrs []Attr
 
-	Backend stack_backend.Backend
+	Backend Backend
 }
 
 func (s *Span) Clone(modFn func(s *Span)) *Span {
@@ -35,7 +45,7 @@ func (s *Span) Clone(modFn func(s *Span)) *Span {
 			RootSpanID:   s.RootSpanID,
 			ParentSpanID: s.ParentSpanID,
 			ID:           s.ID,
-			Attrs:        make([]stack_backend.Attr, len(s.Attrs)),
+			Attrs:        make([]Attr, len(s.Attrs)),
 			Backend:      s.Backend,
 		}
 		copy(cloned.Attrs, s.Attrs)

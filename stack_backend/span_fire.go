@@ -1,13 +1,12 @@
-package span
+package stack_backend
 
 import (
-	"github.com/thearchitect/stack/stack_backend"
 	"time"
 )
 
 func (s *Span) FireSpan() {
-	s.Backend.Handle(stack_backend.Event{
-		Kind: stack_backend.Kind{
+	s.Backend.Handle(Event{
+		Kind: Kind{
 			Span: true,
 		},
 		ID:       s.ID,
@@ -20,8 +19,8 @@ func (s *Span) FireSpan() {
 }
 
 func (s *Span) FireSpanEnd() {
-	s.Backend.Handle(stack_backend.Event{
-		Kind: stack_backend.Kind{
+	s.Backend.Handle(Event{
+		Kind: Kind{
 			SpanEnd: true,
 		},
 		ID:       s.ID,
@@ -34,9 +33,9 @@ func (s *Span) FireSpanEnd() {
 	})
 }
 
-func (s *Span) FireLog(name string, level string, err error, ownAttrs []stack_backend.Attr) {
-	s.Backend.Handle(stack_backend.Event{
-		Kind: stack_backend.Kind{
+func (s *Span) FireLog(name string, level string, err error, ownAttrs []Attr) {
+	s.Backend.Handle(Event{
+		Kind: Kind{
 			Log: true,
 		},
 		ID:       GenerateID(),

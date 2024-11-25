@@ -5,6 +5,7 @@ import (
 	"log/slog"
 )
 
+// NewSlogHandler creates slog.Handler instance connected to the Stack instance in supplied 'ctx'
 func NewSlogHandler(ctx context.Context) slog.Handler {
 	return slogHandler{}
 }

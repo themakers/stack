@@ -12,10 +12,18 @@ const (
 	LevelSpanEnd = "span-"
 )
 
+var _ SpanOption = Attr{}
+
 type Attr struct {
 	Name  string
 	Value any
 }
+
+func (a Attr) ApplyToSpan(s *Span) {
+	s.Attrs = append(s.Attrs, a)
+}
+
+type RawAttrValue string
 
 type Kind struct {
 	Span    bool

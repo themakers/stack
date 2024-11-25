@@ -1,5 +1,16 @@
 # Stack
 
+### TODO
+ - [ ] Improve decomposition
+ - [ ] Errors design +stacktraces
+ - [ ] Readme
+ - [ ] Demo/boilerplate
+ - [ ] Compose
+ - [ ] Delivery
+ - [ ] StdLog impl
+
+
+
 * Instantly find out any error origin
 * Simplify and unify tracing and logging patterns
 * Automatically attach context fields to spans

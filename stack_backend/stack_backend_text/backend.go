@@ -2,13 +2,14 @@ package stack_backend_text
 
 import (
 	"bytes"
+	"encoding/json"
 	"github.com/fatih/color"
 	"github.com/thearchitect/stack/stack_backend"
 	"os"
 	"time"
 )
 
-const timeFormat = "2006-01-02T15:04:05.000000000"
+const timeFormat = "2006-01-02 15:04:05.000000000"
 
 var _ stack_backend.Backend = Backend{}
 
@@ -59,7 +60,7 @@ func (b Backend) Handle(e stack_backend.Event) {
 
 	w.WriteString(t.Format(timeFormat))
 	w.WriteString(" ")
-	w.WriteString(clrs.LevelColor.Sprintf(" %-6s", lev))
+	w.WriteString(clrs.LevelColor.Sprintf(" %-5s ", lev))
 	w.WriteString(" ")
 	w.WriteString(clrs.NameColor.Sprint(e.Name))
 
@@ -68,16 +69,42 @@ func (b Backend) Handle(e stack_backend.Event) {
 		w.WriteString(clrs.OwnAttrColor.Sprint(dur))
 	}
 
-	for _, f := range e.OwnAttrs {
+	//w.WriteString(" {")
+	for i, f := range e.OwnAttrs {
 		w.WriteString(" ")
-		w.WriteString(clrs.OwnAttrColor.Sprintf("%s=%v", f.Name, f.Value))
+		var v any
+		switch f.Value.(type) {
+		case stack_backend.RawAttrValue:
+			v = f.Value
+		default:
+			v = jsonVal(f.Value)
+		}
+		w.WriteString(clrs.OwnAttrColor.Sprintf(`%s=%s`, f.Name, v))
+		if i < len(e.OwnAttrs)-1 {
+			w.WriteString(",")
+		}
 	}
 
-	for _, f := range e.Attrs {
-		w.WriteString(" ")
-		w.WriteString(clrs.NestedAttrColor.Sprintf("%s=%v", f.Name, f.Value))
+	if len(e.OwnAttrs) > 0 && len(e.Attrs) > 0 {
+		w.WriteString(",")
 	}
 
+	for i, f := range e.Attrs {
+		w.WriteString(" ")
+		var v any
+		switch f.Value.(type) {
+		case stack_backend.RawAttrValue:
+			v = f.Value
+		default:
+			v = jsonVal(f.Value)
+		}
+		w.WriteString(clrs.NestedAttrColor.Sprintf(`%s=%s`, f.Name, v))
+		if i < len(e.Attrs)-1 {
+			w.WriteString(",")
+		}
+	}
+
+	//w.WriteString(" }\n")
 	w.WriteString("\n")
 
 	if _, err := w.WriteTo(os.Stdout); err != nil {
@@ -101,4 +128,12 @@ type logColors struct {
 	NameColor       *color.Color
 	NestedAttrColor *color.Color
 	OwnAttrColor    *color.Color
+}
+
+func jsonVal(v any) string {
+	if data, err := json.MarshalIndent(v, "", "  "); err != nil {
+		panic(err)
+	} else {
+		return string(data)
+	}
 }

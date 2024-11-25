@@ -8,6 +8,8 @@ import (
 	"github.com/thearchitect/stack"
 	"github.com/thearchitect/stack/stack_backend/stack_backend_text"
 	"github.com/thearchitect/stack/stack_stdlog"
+
+	"github.com/thearchitect/stack/test/log_events"
 )
 
 func main() {
@@ -17,22 +19,29 @@ func main() {
 	ctx = stack.New(ctx, stack_backend_text.New())
 	stack_stdlog.Hijack(ctx)
 
-	ctx, cancel = stack.Span(ctx, stack.AA("buildnum", 100500))
-	defer cancel()
+	ctx, end := stack.Span(ctx, stack.F("buildnum", 100500))
+	defer end()
+
+	stack.Log(ctx, "ajajajajajaja", "test", stack.F("test", map[string]any{"hello": "kitty", "bananas": 10}))
+
+	stack.TLog(ctx, log_events.TestRecord{
+		Name:         "j doe",
+		RegisteredAt: time.Now(),
+	})
 
 	(func() {
 		ctx, cancel := stack.Span(ctx, stack.Name("spaaaaana"))
 		defer cancel()
 
-		stack.Info(ctx, "hello kitty", stack.A("user_name", "kenji kawai"))
+		stack.Info(ctx, "hello kitty", stack.F("user_name", "kenji kawai"))
 
 		SpaaaaaaaaaanFunc(ctx)
 	})()
 }
 
 func SpaaaaaaaaaanFunc(ctx context.Context) {
-	ctx, cancel := stack.Span(ctx)
-	defer cancel()
+	ctx, end := stack.Span(ctx)
+	defer end()
 
 	stack.Error(ctx, "woooooork", errors.New("test-error"))
 

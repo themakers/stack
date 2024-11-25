@@ -2,7 +2,7 @@ package stack
 
 import (
 	"context"
-	"github.com/thearchitect/stack/span"
+	"github.com/thearchitect/stack/stack_backend"
 )
 
 type unwrapOne interface { // from errors.is
@@ -22,12 +22,12 @@ func NewError(ctx context.Context, err error, attrs ...Attr) error {
 		return nil
 	}
 
-	s := span.Get(ctx)
+	s := stack_backend.Get(ctx)
 
 	//> The first registered error becomes 'root cause'
 	if _, found := findRootCauseError(err); !found {
 		err = &rootCauseError{
-			id:       span.GenerateID(),
+			id:       stack_backend.GenerateID(),
 			spanID:   s.ID,
 			cause:    err,
 			trace:    stacktrace(),
