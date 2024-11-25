@@ -41,6 +41,8 @@ func (s *Span) Clone(modFn func(s *Span)) *Span {
 		copy(cloned.Attrs, s.Attrs)
 	}
 
+	cloned.Time = time.Now()
+
 	if modFn != nil {
 		modFn(cloned)
 	}

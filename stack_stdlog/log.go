@@ -8,6 +8,7 @@ import (
 func NewLogWriter(ctx context.Context) io.Writer {
 	// TODO
 	return writerFunc(func(p []byte) (n int, err error) {
+
 		return 0, err
 	})
 }

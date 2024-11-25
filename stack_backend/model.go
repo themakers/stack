@@ -2,6 +2,16 @@ package stack_backend
 
 import "time"
 
+const (
+	LevelDebug = "debug"
+	LevelInfo  = "info"
+	LevelWarn  = "warn"
+	LevelError = "error"
+
+	LevelSpan    = "span+"
+	LevelSpanEnd = "span-"
+)
+
 type Attr struct {
 	Name  string
 	Value any

@@ -2,6 +2,8 @@ package stack
 
 import (
 	"context"
+	"fmt"
+	"github.com/thearchitect/stack/stack_backend"
 
 	"github.com/thearchitect/stack/span"
 )
@@ -9,6 +11,12 @@ import (
 func Name(name string) option {
 	return func(s *span.Span) {
 		s.Name = name
+	}
+}
+
+func AA(name string, value any) option {
+	return func(s *span.Span) {
+		s.Attrs = append(s.Attrs, Attr{Name: name, Value: value})
 	}
 }
 
@@ -52,6 +60,10 @@ func Span(ctx context.Context, ops ...option) (context.Context, context.CancelFu
 	ctx = span.Put(ctx, span.Clone(ctx, func(s *span.Span) {
 		s.PushSpanID(span.GenerateID())
 		s.Name, _, _ = operation(3)
+		s.Name = fmt.Sprint(s.Name, "()") // ???
+		for _, o := range ops {
+			o(s)
+		}
 		s.FireSpan()
 	}))
 
@@ -65,13 +77,6 @@ func Recover(ctx context.Context, rFn func(rec any)) {}
 ////
 ////
 ////
-
-const (
-	levelDebug = "debug"
-	levelInfo  = "info"
-	levelWarn  = "warn"
-	levelError = "error"
-)
 
 func TLog(ctx context.Context, typed any) {
 	// TODO
@@ -87,17 +92,17 @@ func Log(ctx context.Context, level, name string, fields ...Attr) {
 }
 
 func Debug(ctx context.Context, name string, fields ...Attr) {
-	log(ctx, levelDebug, name, nil, fields...)
+	log(ctx, stack_backend.LevelDebug, name, nil, fields...)
 }
 
 func Info(ctx context.Context, name string, fields ...Attr) {
-	log(ctx, levelInfo, name, nil, fields...)
+	log(ctx, stack_backend.LevelInfo, name, nil, fields...)
 }
 
 func Warn(ctx context.Context, name string, fields ...Attr) {
-	log(ctx, levelWarn, name, nil, fields...)
+	log(ctx, stack_backend.LevelWarn, name, nil, fields...)
 }
 
 func Error(ctx context.Context, name string, err error, fields ...Attr) {
-	log(ctx, levelError, name, err, fields...)
+	log(ctx, stack_backend.LevelError, name, err, fields...)
 }

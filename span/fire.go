@@ -7,6 +7,9 @@ import (
 
 func (s *Span) FireSpan() {
 	s.Backend.Handle(stack_backend.Event{
+		Kind: stack_backend.Kind{
+			Span: true,
+		},
 		ID:       s.ID,
 		ParentID: s.ParentSpanID,
 		RootID:   s.RootSpanID,
@@ -18,6 +21,9 @@ func (s *Span) FireSpan() {
 
 func (s *Span) FireSpanEnd() {
 	s.Backend.Handle(stack_backend.Event{
+		Kind: stack_backend.Kind{
+			SpanEnd: true,
+		},
 		ID:       s.ID,
 		ParentID: s.ParentSpanID,
 		RootID:   s.RootSpanID,
@@ -30,6 +36,9 @@ func (s *Span) FireSpanEnd() {
 
 func (s *Span) FireLog(name string, level string, err error, ownAttrs []stack_backend.Attr) {
 	s.Backend.Handle(stack_backend.Event{
+		Kind: stack_backend.Kind{
+			Log: true,
+		},
 		ID:       GenerateID(),
 		ParentID: s.ID,
 		RootID:   s.RootSpanID,
