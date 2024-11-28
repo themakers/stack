@@ -45,5 +45,24 @@ func SpaaaaaaaaaanFunc(ctx context.Context) {
 
 	stack.Error(ctx, "woooooork", errors.New("test-error"))
 
+	//err := _drafts.NewError(ctx, err, stack.F(), stack.F(), stack.F())
+	//if IsMND(err) {
+	//	MNDE{err}
+	//} else {
+	//	ISE{err}
+	//}
+
 	time.Sleep(10 * time.Millisecond)
+}
+
+type PermissionDeniedError struct {
+	cause error
+}
+
+type MNDE struct {
+	cause error
+}
+
+type ISE struct {
+	cause error
 }

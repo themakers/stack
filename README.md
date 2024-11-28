@@ -1,8 +1,10 @@
 # Stack
 
 ### TODO
- - [ ] Improve decomposition
- - [ ] Errors design +stacktraces
+ - [~] Improve decomposition
+ - [~] Errors design
+ - [ ] stacktraces
+ - [ ] file/line
  - [ ] Readme
  - [ ] Demo/boilerplate
  - [ ] Compose

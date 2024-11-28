@@ -1,8 +1,12 @@
-package stack
+package _drafts
 
 import (
+	"bytes"
 	"context"
+	"github.com/DataDog/gostackparse"
+	"github.com/thearchitect/stack"
 	"github.com/thearchitect/stack/stack_backend"
+	"runtime/debug"
 )
 
 type unwrapOne interface { // from errors.is
@@ -17,7 +21,7 @@ type errorIs interface { // from errors.is
 	Is(error) bool
 }
 
-func NewError(ctx context.Context, err error, attrs ...Attr) error {
+func NewError(ctx context.Context, err error, attrs ...stack.Attr) error {
 	if err == nil {
 		return nil
 	}
@@ -39,4 +43,22 @@ func NewError(ctx context.Context, err error, attrs ...Attr) error {
 	}
 
 	return err
+}
+
+func stacktrace() *gostackparse.Goroutine {
+	const skip = 2
+
+	s := debug.Stack()
+
+	goroutines, errs := gostackparse.Parse(bytes.NewReader(s))
+
+	if len(errs) > 0 {
+		println("malformed stacktrace:", string(s))
+	}
+
+	goroutine := goroutines[0]
+
+	goroutine.Stack = goroutine.Stack[skip:]
+
+	return goroutine
 }

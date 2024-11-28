@@ -20,3 +20,11 @@ type MuxBackendRule struct {
 func MuxBackend(rules ...MuxBackendRule) Backend {
 	return nil
 }
+
+func EventFilter(backend Backend, filterFn func(e *Event) bool) Backend {
+	return BackendFunc(func(e Event) {
+		if filterFn(&e) {
+			backend.Handle(e)
+		}
+	})
+}

@@ -1,14 +1,15 @@
-package stack
+package _drafts
 
 import (
 	"errors"
 	"fmt"
+	"github.com/thearchitect/stack"
 )
 
 var (
-	_ error      = (*wrappedError)(nil)
-	_ unwrapMany = (*wrappedError)(nil)
-	_ errorIs    = (*wrappedError)(nil)
+	_ error            = (*wrappedError)(nil)
+	_ stack.unwrapMany = (*wrappedError)(nil)
+	_ stack.errorIs    = (*wrappedError)(nil)
 )
 
 type wrappedError struct {

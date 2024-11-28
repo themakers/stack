@@ -1,7 +1,8 @@
-package stack
+package _drafts
 
 import (
 	"errors"
+	"github.com/thearchitect/stack"
 
 	"github.com/DataDog/gostackparse"
 )
@@ -17,8 +18,8 @@ type rootCauseError struct {
 	spanID   string
 	cause    error
 	trace    *gostackparse.Goroutine
-	attrs    []Attr
-	ownAttrs []Attr
+	attrs    []stack.Attr
+	ownAttrs []stack.Attr
 }
 
 func (e *rootCauseError) Error() string {

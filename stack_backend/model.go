@@ -25,13 +25,23 @@ func (a Attr) ApplyToSpan(s *Span) {
 
 type RawAttrValue string
 
-type Kind struct {
-	Span    bool
-	SpanEnd bool
-	Log     bool
-	Error   bool
-	Metric  bool
-}
+type Kind uint8
+
+const (
+	KindSpan Kind = 1 << iota
+	KindSpanEnd
+	KindLog
+	KindError
+	//KindMetric
+)
+
+//struct {
+//	Span    bool
+//	SpanEnd bool
+//	Log     bool
+//	Error   bool
+//	Metric  bool
+//}
 
 type Event struct {
 	Kind Kind
@@ -52,8 +62,10 @@ type Event struct {
 	EndTime time.Time
 
 	//> Log
-	Level string
-	Error error
+	Level      string
+	Error      error
+	Panic      any
+	IsTypedLog bool
 
 	//> Metric
 	// TODO

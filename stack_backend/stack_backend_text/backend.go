@@ -34,15 +34,15 @@ func (b Backend) Handle(e stack_backend.Event) {
 
 	t = e.Time
 
-	if e.Kind.Span {
+	if e.Kind&stack_backend.KindSpan != 0 {
 		lev = stack_backend.LevelSpan
 		clrs.LevelColor = color.New(color.FgWhite)
-	} else if e.Kind.SpanEnd {
+	} else if e.Kind&stack_backend.KindSpanEnd != 0 {
 		lev = stack_backend.LevelSpanEnd
 		clrs.LevelColor = color.New(color.FgHiWhite)
 		t = e.EndTime
 		dur = e.EndTime.Sub(e.Time)
-	} else if e.Kind.Log {
+	} else if e.Kind&stack_backend.KindLog != 0 {
 		lev = e.Level
 		switch e.Level {
 		case stack_backend.LevelDebug:
