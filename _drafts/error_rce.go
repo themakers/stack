@@ -2,7 +2,7 @@ package _drafts
 
 import (
 	"errors"
-	"github.com/thearchitect/stack"
+	"github.com/themakers/stack"
 
 	"github.com/DataDog/gostackparse"
 )

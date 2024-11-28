@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"github.com/DataDog/gostackparse"
-	"github.com/thearchitect/stack"
-	"github.com/thearchitect/stack/stack_backend"
+	"github.com/themakers/stack"
+	"github.com/themakers/stack/stack_backend"
 	"runtime/debug"
 )
 

@@ -1,4 +1,4 @@
-module github.com/thearchitect/stack
+module github.com/themakers/stack
 
 go 1.23.1
 

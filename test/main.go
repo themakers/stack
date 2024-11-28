@@ -5,11 +5,11 @@ import (
 	"errors"
 	"time"
 
-	"github.com/thearchitect/stack"
-	"github.com/thearchitect/stack/stack_backend/stack_backend_text"
-	"github.com/thearchitect/stack/stack_stdlog"
+	"github.com/themakers/stack"
+	"github.com/themakers/stack/stack_backend/stack_backend_text"
+	"github.com/themakers/stack/stack_stdlog"
 
-	"github.com/thearchitect/stack/test/log_events"
+	"github.com/themakers/stack/test/log_events"
 )
 
 func main() {

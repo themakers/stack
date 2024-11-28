@@ -1,7 +1,7 @@
 package stack_backend_dummy
 
 import (
-	"github.com/thearchitect/stack/stack_backend"
+	"github.com/themakers/stack/stack_backend"
 )
 
 var _ stack_backend.Backend = Backend{}
