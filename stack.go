@@ -78,9 +78,15 @@ func Span(ctx context.Context, opts ...stack_backend.SpanOption) (context.Contex
 		if s.ID == "" {
 			s.ID = newSpanID
 		}
-		if s.ParentSpanID != "" && s.RootSpanID == "" {
-			s.RootSpanID = s.ParentSpanID
+
+		if s.RootSpanID == "" {
+			if s.ParentSpanID != "" {
+				s.RootSpanID = s.ParentSpanID
+			} else {
+				s.RootSpanID = s.ID
+			}
 		}
+
 		s.ParentSpanID = s.ID
 		s.ID = newSpanID
 	}
