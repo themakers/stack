@@ -11,6 +11,10 @@ import (
 
 type Attr = stack_backend.Attr
 
+func A(name string, value any) Attr {
+	return Attr{Name: name, Value: value}
+}
+
 func New(ctx context.Context, backend stack_backend.Backend) context.Context {
 	return stack_backend.Put(ctx, stack_backend.Clone(ctx, func(s *stack_backend.Span) {
 		s.Backend = backend
@@ -47,8 +51,10 @@ func Name(name string) stack_backend.SpanOption {
 	})
 }
 
-func A(name string, value any) Attr {
-	return Attr{Name: name, Value: value}
+func AddName(name string) stack_backend.SpanOption {
+	return stack_backend.SpanOptionFunc(func(s *stack_backend.Span) {
+		s.Name = fmt.Sprintf("%s: %s", s.Name, name)
+	})
 }
 
 // With TODO: Is this method helpful? Maybe just delete it?

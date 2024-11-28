@@ -30,7 +30,7 @@ func main() {
 	})
 
 	(func() {
-		ctx, cancel := stack.Span(ctx, stack.Name("spaaaaana"))
+		ctx, cancel := stack.Span(ctx, stack.AddName("spaaaaana"))
 		defer cancel()
 
 		stack.Info(ctx, "hello kitty", stack.A("user_name", "kenji kawai"))
