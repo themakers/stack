@@ -35,14 +35,6 @@ const (
 	//KindMetric
 )
 
-//struct {
-//	Span    bool
-//	SpanEnd bool
-//	Log     bool
-//	Error   bool
-//	Metric  bool
-//}
-
 type Event struct {
 	Kind Kind
 

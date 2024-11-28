@@ -3,16 +3,25 @@ package stack
 import (
 	"context"
 	"fmt"
-	"github.com/thearchitect/stack/stack_backend"
 	"reflect"
 	"time"
+
+	"github.com/thearchitect/stack/stack_backend"
 )
 
+type Attr = stack_backend.Attr
+
+func New(ctx context.Context, backend stack_backend.Backend) context.Context {
+	return stack_backend.Put(ctx, stack_backend.Clone(ctx, func(s *stack_backend.Span) {
+		s.Backend = backend
+	}))
+}
+
 //
-// ▗▄▖ ▗▄▄▖▗▄▄▄▖▗▄▄▄▖ ▗▄▖ ▗▖  ▗▖ ▗▄▄▖
-//▐▌ ▐▌▐▌ ▐▌ █    █  ▐▌ ▐▌▐▛▚▖▐▌▐▌
-//▐▌ ▐▌▐▛▀▘  █    █  ▐▌ ▐▌▐▌ ▝▜▌ ▝▀▚▖
-//▝▚▄▞▘▐▌    █  ▗▄█▄▖▝▚▄▞▘▐▌  ▐▌▗▄▄▞▘
+//  ▗▄▖ ▗▄▄▖▗▄▄▄▖▗▄▄▄▖ ▗▄▖ ▗▖  ▗▖ ▗▄▄▖
+// ▐▌ ▐▌▐▌ ▐▌ █    █  ▐▌ ▐▌▐▛▚▖▐▌▐▌
+// ▐▌ ▐▌▐▛▀▘  █    █  ▐▌ ▐▌▐▌ ▝▜▌ ▝▀▚▖
+// ▝▚▄▞▘▐▌    █  ▗▄█▄▖▝▚▄▞▘▐▌  ▐▌▗▄▄▞▘
 //
 
 func Trace(traceID, parentSpanID string) stack_backend.SpanOption {
@@ -38,7 +47,7 @@ func Name(name string) stack_backend.SpanOption {
 	})
 }
 
-func F(name string, value any) Attr {
+func A(name string, value any) Attr {
 	return Attr{Name: name, Value: value}
 }
 
@@ -76,7 +85,7 @@ func Span(ctx context.Context, opts ...stack_backend.SpanOption) (context.Contex
 		s.ID = newSpanID
 	}
 
-	s.Name, _, _ = operation(3)
+	s.Name, _, _ = stack_backend.Operation(3)
 	s.Name = fmt.Sprint(s.Name, "()") // ???
 
 	for _, o := range opts {
@@ -139,24 +148,24 @@ func log(ctx context.Context, level, name string, err error, attrs ...Attr) {
 	s.Backend.Handle(e)
 }
 
-func Log(ctx context.Context, level, name string, fields ...Attr) {
-	log(ctx, level, name, nil, fields...)
+func Log(ctx context.Context, level, name string, attrs ...Attr) {
+	log(ctx, level, name, nil, attrs...)
 }
 
-func Debug(ctx context.Context, name string, fields ...Attr) {
-	log(ctx, stack_backend.LevelDebug, name, nil, fields...)
+func Debug(ctx context.Context, name string, attrs ...Attr) {
+	log(ctx, stack_backend.LevelDebug, name, nil, attrs...)
 }
 
-func Info(ctx context.Context, name string, fields ...Attr) {
-	log(ctx, stack_backend.LevelInfo, name, nil, fields...)
+func Info(ctx context.Context, name string, attrs ...Attr) {
+	log(ctx, stack_backend.LevelInfo, name, nil, attrs...)
 }
 
-func Warn(ctx context.Context, name string, fields ...Attr) {
-	log(ctx, stack_backend.LevelWarn, name, nil, fields...)
+func Warn(ctx context.Context, name string, attrs ...Attr) {
+	log(ctx, stack_backend.LevelWarn, name, nil, attrs...)
 }
 
-func Error(ctx context.Context, name string, err error, fields ...Attr) error {
-	log(ctx, stack_backend.LevelError, name, err, fields...)
+func Error(ctx context.Context, name string, err error, attrs ...Attr) error {
+	log(ctx, stack_backend.LevelError, name, err, attrs...)
 	return nil
 }
 
@@ -197,10 +206,10 @@ func TLog(ctx context.Context, typed any) {
 }
 
 //
-//▗▄▄▄▖▗▄▄▖ ▗▄▄▖  ▗▄▖ ▗▄▄▖  ▗▄▄▖
-//▐▌   ▐▌ ▐▌▐▌ ▐▌▐▌ ▐▌▐▌ ▐▌▐▌
-//▐▛▀▀▘▐▛▀▚▖▐▛▀▚▖▐▌ ▐▌▐▛▀▚▖ ▝▀▚▖
-//▐▙▄▄▖▐▌ ▐▌▐▌ ▐▌▝▚▄▞▘▐▌ ▐▌▗▄▄▞▘
+// ▗▄▄▄▖▗▄▄▖ ▗▄▄▖  ▗▄▖ ▗▄▄▖  ▗▄▄▖
+// ▐▌   ▐▌ ▐▌▐▌ ▐▌▐▌ ▐▌▐▌ ▐▌▐▌
+// ▐▛▀▀▘▐▛▀▚▖▐▛▀▚▖▐▌ ▐▌▐▛▀▚▖ ▝▀▚▖
+// ▐▙▄▄▖▐▌ ▐▌▐▌ ▐▌▝▚▄▞▘▐▌ ▐▌▗▄▄▞▘
 //
 
 func Recover(ctx context.Context, rFn func(rec any)) {
