@@ -85,7 +85,7 @@ func Span(ctx context.Context, opts ...stack_backend.SpanOption) (context.Contex
 		s.ID = newSpanID
 	}
 
-	s.Name, _, _ = stack_backend.Operation(3)
+	s.Name, _, _ = stack_backend.Operation(0)
 	s.Name = fmt.Sprint(s.Name, "()") // ???
 
 	for _, o := range opts {
