@@ -1,4 +1,7 @@
 .idea
 *.iml
 
+/tmp
+
+/test/demo/volumes
 /test/test

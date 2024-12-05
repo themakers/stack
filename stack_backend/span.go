@@ -1,16 +1,15 @@
 package stack_backend
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"runtime"
 	"time"
-
-	"github.com/rs/xid"
 )
-
-func GenerateID() string {
-	return xid.New().String()
-}
 
 type SpanOption interface {
 	ApplyToSpan(s *Span)
@@ -57,9 +56,9 @@ func Put(ctx context.Context, s *Span) context.Context {
 //
 
 type Span struct {
-	ID           string
-	RootSpanID   string
-	ParentSpanID string
+	ID           ID
+	ParentSpanID ID
+	TraceID      TraceID
 
 	Name string
 
@@ -93,6 +92,70 @@ func (s *Span) Clone(modFn func(s *Span)) *Span {
 // ▐▌ ▐▌  █    █  ▐▌    ▝▀▚▖
 // ▝▚▄▞▘  █  ▗▄█▄▖▐▙▄▄▖▗▄▄▞▘
 //
+
+var _ json.Marshaler = NewTraceID()
+
+type TraceID [16]byte
+
+func NewTraceID() (id TraceID) {
+	if _, err := rand.Read(id[:]); err != nil {
+		panic(err)
+	}
+	return id
+}
+
+func (id TraceID) IsZero() bool {
+	var id0 TraceID
+	return bytes.Equal(id[:], id0[:])
+}
+
+func (id TraceID) Bytes() []byte {
+	return id[:]
+}
+
+func (id TraceID) String() string {
+	return hex.EncodeToString(id[:])
+}
+
+func (id TraceID) MarshalJSON() ([]byte, error) {
+	if id.IsZero() {
+		return []byte("null"), nil
+	} else {
+		return []byte(fmt.Sprintf(`"%s"`, id)), nil
+	}
+}
+
+var _ json.Marshaler = NewID()
+
+type ID [8]byte
+
+func NewID() (id ID) {
+	if _, err := rand.Read(id[:]); err != nil {
+		panic(err)
+	}
+	return id
+}
+
+func (id ID) IsZero() bool {
+	var id0 ID
+	return bytes.Equal(id[:], id0[:])
+}
+
+func (id ID) Bytes() []byte {
+	return id[:]
+}
+
+func (id ID) String() string {
+	return hex.EncodeToString(id[:])
+}
+
+func (id ID) MarshalJSON() ([]byte, error) {
+	if id.IsZero() {
+		return []byte("null"), nil
+	} else {
+		return []byte(fmt.Sprintf(`"%s"`, id)), nil
+	}
+}
 
 func Operation(skip int) (funcName string, file string, line int) {
 	const (

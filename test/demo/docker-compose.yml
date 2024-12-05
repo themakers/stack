@@ -1,0 +1,47 @@
+services:
+  jaeger:
+    image: jaegertracing/jaeger:2.0.0
+    # ports:
+    #   - "16686:16686" # Web UI
+    volumes:
+      - ./jaeger-ui-config.json:/jaeger-ui-config.json:ro
+      - ./jaeger.yaml:/jaeger.yaml:ro
+    command:
+      - --config=/jaeger.yaml
+    depends_on:
+      - quickwit
+
+  quickwit:
+    image: quickwit/quickwit:0.8.2
+    environment:
+      - QW_DISABLE_TELEMETRY=1
+      - QW_ENABLE_OTLP_ENDPOINT=true
+      - QW_ENABLE_OPENTELEMETRY_OTLP_EXPORTER=true
+      - QW_ENABLE_JAEGER_ENDPOINT=true
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://0.0.0.0:7281
+    #ports:
+    #  - "7280:7280" # Web UI and API
+    #  - "7281:7281" # OTEL gRPC
+    user: "${USER_ID}:${GROUP_ID}"
+    volumes:
+      - ./volumes/quickwit-data:/quickwit/qwdata:rw
+    command: ["run"]
+
+  traefik:
+    image: traefik:v3.2.1
+    restart: always
+    command:
+      - "--api.insecure=true"       # Expose the Traefik dashboard on /dashboard
+      # - "--providers.docker=true"  # Enable Docker provider
+      - "--providers.file.filename=/traefik.yml"  # Load merged config
+      - "--entrypoints.web.address=:80"  # Expose web entry point
+    ports:
+      - "32751:80"       # HTTP traffic
+      # - "8080:8080"   # Dashboard (optional)
+    volumes:
+      - "./traefik.yml:/traefik.yml:ro"
+      - "./traefik-file.yml:/traefik-file.yml:ro"
+    depends_on:
+      - jaeger
+      - quickwit
+

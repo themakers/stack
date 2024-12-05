@@ -1,0 +1,76 @@
+# https://github.com/jaegertracing/jaeger/blob/main/cmd/jaeger/config-remote-storage.yaml
+# https://github.com/jaegertracing/jaeger/blob/main/cmd/jaeger/config-spm.yaml
+
+service:
+  extensions: [jaeger_storage, jaeger_query, healthcheckv2]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [jaeger_storage_exporter]
+#  telemetry:
+#    resource:
+#      service.name: jaeger
+#    metrics:
+#      level: detailed
+#      address: 0.0.0.0:8888
+#    logs:
+#      level: debug
+
+extensions:
+  healthcheckv2:
+    use_v2: true
+    http:
+
+  jaeger_query:
+    storage:
+      traces: quickwit-1
+    ui:
+#      config_file: /jaeger-ui-config.json
+      log_access: true
+    base_path: /jaeger
+    grpc:
+      endpoint: 0.0.0.0:16685
+    http:
+      endpoint: 0.0.0.0:16686
+
+  jaeger_storage:
+    backends:
+      quickwit-1:
+        grpc:
+          endpoint: quickwit:7281
+          tls:
+            insecure: true
+#      quickwit-w:
+#        grpc:
+#          endpoint: quickwit:7280
+#          tls:
+#            insecure: true
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+      http:
+
+exporters:
+  jaeger_storage_exporter:
+    trace_storage: quickwit-1
+
+
+
+
+
+
+#  jaeger_query:
+#    storage:
+#      traces: some_store
+#      traces_archive: another_store
+#    ui:
+#      config_file: ./cmd/jaeger/config-ui.json
+#
+#query:
+#  base-path: /
+#  static-files: /go/bin/jaeger-ui-build/build
+#  ui-config: /etc/jaeger/ui-config.json
+#  grpc:
+#  http:

@@ -3,9 +3,12 @@ package main
 import (
 	"context"
 	"errors"
+	"github.com/themakers/stack/stack_backend/stack_backend_json"
+	"github.com/themakers/stack/stack_backend/stack_backend_otel"
 	"time"
 
 	"github.com/themakers/stack"
+	"github.com/themakers/stack/stack_backend"
 	"github.com/themakers/stack/stack_backend/stack_backend_text"
 	"github.com/themakers/stack/stack_stdlog"
 
@@ -16,7 +19,16 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	ctx = stack.New(ctx, stack_backend_text.New())
+	backendOTEL, closeBackendOTEL := stack_backend_otel.New("localhost:32751")
+	defer closeBackendOTEL()
+
+	ctx = stack.New(ctx,
+		stack_backend.TeeBackend(
+			stack_backend_text.New(),
+			stack_backend_json.New(),
+			backendOTEL,
+		),
+	)
 	stack_stdlog.Hijack(ctx)
 
 	ctx, end := stack.Span(ctx, stack.A("buildnum", 100500))

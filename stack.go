@@ -28,19 +28,18 @@ func New(ctx context.Context, backend stack_backend.Backend) context.Context {
 // ▝▚▄▞▘▐▌    █  ▗▄█▄▖▝▚▄▞▘▐▌  ▐▌▗▄▄▞▘
 //
 
-func Trace(traceID, parentSpanID string) stack_backend.SpanOption {
+func Trace(traceID stack_backend.TraceID, parentSpanID stack_backend.ID) stack_backend.SpanOption {
 	return stack_backend.SpanOptionFunc(func(s *stack_backend.Span) {
-		if traceID != "" {
-			s.RootSpanID = traceID
+		if !traceID.IsZero() {
+			s.TraceID = traceID
+		} else {
+			s.TraceID = stack_backend.NewTraceID()
 		}
-		if parentSpanID != "" {
+
+		if !parentSpanID.IsZero() {
 			s.ParentSpanID = parentSpanID
-		}
-		if s.RootSpanID == "" {
-			s.RootSpanID = s.ParentSpanID
-		}
-		if s.ParentSpanID == "" {
-			s.ParentSpanID = s.RootSpanID
+		} else {
+			s.ParentSpanID = s.ID
 		}
 	})
 }
@@ -78,24 +77,12 @@ type endFunc func()
 func Span(ctx context.Context, opts ...stack_backend.SpanOption) (context.Context, endFunc) {
 	var s = stack_backend.Clone(ctx, nil)
 
-	var newSpanID = stack_backend.GenerateID()
-
-	{ //> Set new span id (while pushing back parent)
-		if s.ID == "" {
-			s.ID = newSpanID
-		}
-
-		if s.RootSpanID == "" {
-			if s.ParentSpanID != "" {
-				s.RootSpanID = s.ParentSpanID
-			} else {
-				s.RootSpanID = s.ID
-			}
-		}
-
-		s.ParentSpanID = s.ID
-		s.ID = newSpanID
+	if s.TraceID.IsZero() {
+		s.TraceID = stack_backend.NewTraceID()
 	}
+
+	s.ParentSpanID = s.ID
+	s.ID = stack_backend.NewID()
 
 	s.Name, _, _ = stack_backend.Operation(0)
 	s.Name = fmt.Sprint(s.Name, "()") // ???
@@ -110,7 +97,7 @@ func Span(ctx context.Context, opts ...stack_backend.SpanOption) (context.Contex
 		Kind:     stack_backend.KindSpan,
 		ID:       s.ID,
 		ParentID: s.ParentSpanID,
-		RootID:   s.RootSpanID,
+		TraceID:  s.TraceID,
 		Name:     s.Name,
 		Time:     s.Time,
 		Attrs:    s.Attrs,
@@ -121,7 +108,7 @@ func Span(ctx context.Context, opts ...stack_backend.SpanOption) (context.Contex
 			Kind:     stack_backend.KindSpanEnd,
 			ID:       s.ID,
 			ParentID: s.ParentSpanID,
-			RootID:   s.RootSpanID,
+			TraceID:  s.TraceID,
 			Name:     s.Name,
 			Time:     s.Time,
 			Attrs:    s.Attrs,
@@ -142,9 +129,9 @@ func log(ctx context.Context, level, name string, err error, attrs ...Attr) {
 
 	var e = stack_backend.Event{
 		Kind:     stack_backend.KindLog,
-		ID:       stack_backend.GenerateID(),
+		ID:       stack_backend.NewID(),
 		ParentID: s.ID,
-		RootID:   s.RootSpanID,
+		TraceID:  s.TraceID,
 		Attrs:    s.Attrs,
 		Time:     time.Now(),
 		Name:     name,
@@ -180,6 +167,9 @@ func Error(ctx context.Context, name string, err error, attrs ...Attr) error {
 	log(ctx, stack_backend.LevelError, name, err, attrs...)
 	return nil
 }
+
+// TODO
+// Panic()
 
 func TLog(ctx context.Context, typed any) {
 	var (

@@ -38,9 +38,9 @@ const (
 type Event struct {
 	Kind Kind
 
-	ID       string
-	ParentID string
-	RootID   string
+	ID       ID
+	ParentID ID
+	TraceID  TraceID
 	Name     string
 
 	Time time.Time

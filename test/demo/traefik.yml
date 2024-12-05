@@ -1,0 +1,21 @@
+log:
+  level: INFO
+  format: json
+
+accessLog:
+  format: json
+
+api:
+  dashboard: true
+
+entryPoints:
+  http:
+    address: ":80"
+
+serversTransport:
+  insecureSkipVerify: true
+
+providers:
+  file:
+    filename: "/traefik-file.yml"
+    watch: true

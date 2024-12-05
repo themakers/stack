@@ -12,8 +12,6 @@ func New() stack_backend.Backend {
 	return Backend{}
 }
 
-func (b Backend) HandleNewRecord(r stack_backend.Event) {
-}
-
-func (b Backend) HandleSpanEnd(r stack_backend.Event) {
+func (b Backend) Handle(_ stack_backend.Event) {
+	//> Discard
 }

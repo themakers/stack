@@ -1,0 +1,29 @@
+{
+  log {
+    output stdout
+    format json
+    include http.log.access http.handlers.reverse_proxy
+    level INFO
+  }
+}
+
+:80 {
+  log
+
+  tracing {
+    span app
+  }
+
+  handle /jaeger* {
+    request_header X-Trace-Id {http.vars.trace_id}
+    reverse_proxy jaeger:16686
+  }
+
+  handle /opentelemetry.* {
+    reverse_proxy quickwit:7281
+  }
+
+  handle {
+    reverse_proxy quickwit:7280
+  }
+}

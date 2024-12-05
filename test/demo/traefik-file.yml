@@ -1,0 +1,40 @@
+# dynamic.yml
+http:
+  middlewares:
+    set-trace-id:
+      headers:
+        customRequestHeaders:
+          X-Trace-Id: "{[headers.x-trace-id]}"
+
+  routers:
+    jaeger:
+      rule: "PathPrefix(`/jaeger`)"
+      service: jaeger
+      middlewares:
+        - set-trace-id
+
+    opentelemetry:
+      rule: "PathPrefix(`/opentelemetry`)"
+      service: opentelemetry
+
+    default:
+      rule: "PathPrefix(`/`)"
+      service: quickwit
+
+  services:
+    jaeger:
+      loadBalancer:
+        servers:
+          - url: "http://jaeger:16686"
+
+    opentelemetry:
+      loadBalancer:
+        servers:
+          - url: "h2c://quickwit:7281"
+          # - url: "http://quickwit:7281"
+          # - url: "http://jaeger:16685"
+
+    quickwit:
+      loadBalancer:
+        servers:
+          - url: "http://quickwit:7280"
