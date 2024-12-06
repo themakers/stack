@@ -78,7 +78,7 @@ func (b Backend) write(w io.Writer, isTTY bool, r record) error {
 	}
 
 	if len(r.OwnAttrs) > 0 && len(r.NestedAttrs) > 0 {
-		buf.WriteString(",")
+		buf.WriteString(r.NestedAttrsColor.Sprint(","))
 	}
 
 	for i, f := range r.NestedAttrs {

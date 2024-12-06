@@ -1,14 +1,14 @@
 # Stack
 
 ### TODO
- - [~] Improve decomposition
- - [~] Errors design
+ - [x] Improve decomposition
+ - [x] Errors design
  - [ ] stacktraces
  - [ ] file/line
  - [ ] Readme
  - [ ] Demo/boilerplate
- - [ ] Compose
- - [ ] Delivery
+ - [x] Compose
+ - [x] Delivery
  - [ ] StdLog impl
 
 
