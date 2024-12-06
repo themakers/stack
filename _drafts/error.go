@@ -21,7 +21,7 @@ type errorIs interface { // from errors.is
 	Is(error) bool
 }
 
-func NewError(ctx context.Context, err error, attrs ...stack.Attr) error {
+func NewError(ctx context.Context, err error, attrs ...stack.A) error {
 	if err == nil {
 		return nil
 	}

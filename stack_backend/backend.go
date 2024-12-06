@@ -1,5 +1,7 @@
 package stack_backend
 
+import "context"
+
 // https://patorjk.com/software/taag/#p=display&f=RubiFont&t=test
 
 //
@@ -11,6 +13,11 @@ package stack_backend
 
 type Backend interface {
 	Handle(e Event)
+	Shutdown(ctx context.Context)
+}
+
+func Shutdown(ctx context.Context) {
+	Get(ctx).Backend.Shutdown(context.TODO())
 }
 
 //
@@ -20,22 +27,37 @@ type Backend interface {
 // ▐▌ ▐▌▐▙▄▄▖▐▙▄▄▖▐▌   ▐▙▄▄▖▐▌ ▐▌▗▄▄▞▘
 //
 
-// BackendFunc
-type BackendFunc func(e Event)
+// backendFuncs
+type BackendFuncs struct {
+	HandleFn   func(e Event)
+	ShutdownFn func(ctx context.Context)
+}
 
-var _ Backend = BackendFunc(func(e Event) {})
+var _ Backend = BackendFuncs{}
 
-func (bFn BackendFunc) Handle(e Event) {
-	bFn(e)
+func (bf BackendFuncs) Handle(e Event) {
+	if bf.HandleFn != nil {
+		bf.HandleFn(e)
+	}
+}
+func (bf BackendFuncs) Shutdown(ctx context.Context) {
+	if bf.ShutdownFn != nil {
+		bf.ShutdownFn(ctx)
+	}
 }
 
 // MuxBackend
 func MuxBackend(rules ...MuxBackendRule) Backend {
-	return BackendFunc(func(e Event) {
-		for _, rule := range rules {
-			rule.TryHandle(e)
-		}
-	})
+	return BackendFuncs{
+		HandleFn: func(e Event) {
+			for _, rule := range rules {
+				rule.TryHandle(e)
+			}
+		},
+		ShutdownFn: func(ctx context.Context) {
+
+		},
+	}
 }
 
 type MuxBackendRule struct {
@@ -66,9 +88,18 @@ func TeeBackend(backends ...Backend) Backend {
 
 // EventFilter
 func EventFilter(backend Backend, filterFn func(e *Event) bool) Backend {
-	return BackendFunc(func(e Event) {
-		if filterFn(&e) {
-			backend.Handle(e)
-		}
+	return BackendFuncs{
+		HandleFn: func(e Event) {
+			if filterFn(&e) {
+				backend.Handle(e)
+			}
+		},
+	}
+}
+
+// TODO
+func LevelFilter(backend Backend) Backend {
+	return EventFilter(backend, func(e *Event) bool {
+		return true
 	})
 }

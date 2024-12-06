@@ -2,9 +2,11 @@ package stack_backend_text
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"github.com/fatih/color"
 	"github.com/themakers/stack/stack_backend"
+	"io"
 	"os"
 	"time"
 )
@@ -19,116 +21,141 @@ func New() stack_backend.Backend {
 	return Backend{}
 }
 
+//	type logColors struct {
+//		LevelColor      *color.Color
+//		NameColor       *color.Color
+//		NestedAttrColor *color.Color
+//		OwnAttrColor    *color.Color
+//	}
+type record struct {
+	Time      time.Time
+	TimeColor *color.Color
+
+	Level      string
+	LevelColor *color.Color
+
+	Name      string
+	NameColor *color.Color
+
+	Duration      time.Duration
+	DurationColor *color.Color
+
+	OwnAttrs      []stack_backend.Attr
+	OwnAttrsColor *color.Color
+
+	NestedAttrs      []stack_backend.Attr
+	NestedAttrsColor *color.Color
+}
+
+func (b Backend) write(w io.Writer, isTTY bool, r record) error {
+	buf := bytes.NewBuffer([]byte{})
+
+	buf.WriteString(r.Time.Format(timeFormat))
+	buf.WriteString(" ")
+	buf.WriteString(r.LevelColor.Sprintf(" %-5s ", r.Level))
+	buf.WriteString(" ")
+	buf.WriteString(r.NameColor.Sprint(r.Name))
+
+	if r.Duration != 0 {
+		buf.WriteString(" ")
+		buf.WriteString(r.OwnAttrsColor.Sprint(r.Duration))
+	}
+
+	//buf.WriteString(" {")
+	for i, f := range r.OwnAttrs {
+		buf.WriteString(" ")
+		var v any
+		switch f.Value.(type) {
+		case stack_backend.RawAttrValue:
+			v = f.Value
+		default:
+			v = jsonVal(f.Value)
+		}
+		buf.WriteString(r.OwnAttrsColor.Sprintf(`%s=%s`, f.Name, v))
+		if i < len(r.OwnAttrs)-1 {
+			buf.WriteString(",")
+		}
+	}
+
+	if len(r.OwnAttrs) > 0 && len(r.NestedAttrs) > 0 {
+		buf.WriteString(",")
+	}
+
+	for i, f := range r.NestedAttrs {
+		buf.WriteString(" ")
+		var v any
+		switch f.Value.(type) {
+		case stack_backend.RawAttrValue:
+			v = f.Value
+		default:
+			v = jsonVal(f.Value)
+		}
+		buf.WriteString(r.NestedAttrsColor.Sprintf(`%s=%s`, f.Name, v))
+		if i < len(r.NestedAttrs)-1 {
+			buf.WriteString(",")
+		}
+	}
+
+	//buf.WriteString(" }\n")
+	buf.WriteString("\n")
+
+	if _, err := buf.WriteTo(w); err != nil {
+		return err
+	} else {
+		return nil
+	}
+}
+
 func (b Backend) Handle(e stack_backend.Event) {
-	var (
-		clrs logColors
-		lev  string
-		t    time.Time
-		w    = bytes.NewBuffer([]byte{})
-		dur  time.Duration
-	)
+	var r record
 
-	clrs.NestedAttrColor = color.New().AddRGB(128, 128, 128)
-	clrs.OwnAttrColor = color.New(color.FgHiWhite)
-	clrs.NameColor = color.New(color.FgMagenta)
-
-	t = e.Time
+	r.NestedAttrsColor = color.New().AddRGB(128, 128, 128)
+	r.OwnAttrsColor = color.New(color.FgHiWhite)
+	r.NameColor = color.New(color.FgMagenta)
 
 	if e.Kind&stack_backend.KindSpan != 0 {
-		lev = stack_backend.LevelSpan
-		clrs.LevelColor = color.New(color.FgWhite)
+		r.Name = e.State.Span.Name
+		r.Level = stack_backend.LevelSpan
+		r.LevelColor = color.New(color.FgWhite)
+		r.OwnAttrs = e.State.Span.Attrs
 	} else if e.Kind&stack_backend.KindSpanEnd != 0 {
-		lev = stack_backend.LevelSpanEnd
-		clrs.LevelColor = color.New(color.FgHiWhite)
-		t = e.EndTime
-		dur = e.EndTime.Sub(e.Time)
+		r.Name = e.State.Span.Name
+		r.Level = stack_backend.LevelSpanEnd
+		r.LevelColor = color.New(color.FgHiWhite)
+		r.Time = e.State.Span.EndTime
+		r.Duration = e.State.Span.EndTime.Sub(e.State.Span.Time)
+		r.OwnAttrs = e.State.Span.Attrs
 	} else if e.Kind&stack_backend.KindLog != 0 {
-		lev = e.Level
-		switch e.Level {
+		r.NestedAttrs = e.State.Span.Attrs
+		r.OwnAttrs = e.LogEvent.OwnAttrs
+		r.Name = e.LogEvent.Name
+		r.Level = e.LogEvent.Level
+		switch e.LogEvent.Level {
 		case stack_backend.LevelDebug:
-			clrs.LevelColor = color.New(color.FgBlack, color.BgHiWhite)
+			r.LevelColor = color.New(color.FgBlack, color.BgHiWhite)
 		case stack_backend.LevelInfo:
-			clrs.LevelColor = color.New(color.FgBlack, color.BgWhite)
+			r.LevelColor = color.New(color.FgBlack, color.BgWhite)
 		case stack_backend.LevelWarn:
-			clrs.LevelColor = color.New(color.FgBlack, color.BgYellow)
+			r.LevelColor = color.New(color.FgBlack, color.BgYellow)
 		case stack_backend.LevelError:
-			clrs.LevelColor = color.New(color.FgBlack, color.BgRed)
+			r.LevelColor = color.New(color.FgBlack, color.BgRed)
 		default:
-			clrs.LevelColor = color.New(color.FgBlue, color.BgWhite)
+			r.LevelColor = color.New(color.FgBlue, color.BgWhite)
 		}
 	}
 
-	w.WriteString(t.Format(timeFormat))
-	w.WriteString(" ")
-	w.WriteString(clrs.LevelColor.Sprintf(" %-5s ", lev))
-	w.WriteString(" ")
-	w.WriteString(clrs.NameColor.Sprint(e.Name))
-
-	if dur != 0 {
-		w.WriteString(" ")
-		w.WriteString(clrs.OwnAttrColor.Sprint(dur))
-	}
-
-	//w.WriteString(" {")
-	for i, f := range e.OwnAttrs {
-		w.WriteString(" ")
-		var v any
-		switch f.Value.(type) {
-		case stack_backend.RawAttrValue:
-			v = f.Value
-		default:
-			v = jsonVal(f.Value)
-		}
-		w.WriteString(clrs.OwnAttrColor.Sprintf(`%s=%s`, f.Name, v))
-		if i < len(e.OwnAttrs)-1 {
-			w.WriteString(",")
-		}
-	}
-
-	if len(e.OwnAttrs) > 0 && len(e.Attrs) > 0 {
-		w.WriteString(",")
-	}
-
-	for i, f := range e.Attrs {
-		w.WriteString(" ")
-		var v any
-		switch f.Value.(type) {
-		case stack_backend.RawAttrValue:
-			v = f.Value
-		default:
-			v = jsonVal(f.Value)
-		}
-		w.WriteString(clrs.NestedAttrColor.Sprintf(`%s=%s`, f.Name, v))
-		if i < len(e.Attrs)-1 {
-			w.WriteString(",")
-		}
-	}
-
-	//w.WriteString(" }\n")
-	w.WriteString("\n")
-
-	if _, err := w.WriteTo(os.Stdout); err != nil {
+	if err := b.write(os.Stdout, true, r); err != nil {
 		panic(err)
 	}
-
 }
 
-type ColorOptions struct {
-}
-
-type Options struct {
-	Colors ColorOptions
-}
-
-//var color = struct {
-//}{}
-
-type logColors struct {
-	LevelColor      *color.Color
-	NameColor       *color.Color
-	NestedAttrColor *color.Color
-	OwnAttrColor    *color.Color
-}
+//type ColorOptions struct {
+//}
+//
+//type Options struct {
+//	Colors ColorOptions
+//}
+//
 
 func jsonVal(v any) string {
 	if data, err := json.MarshalIndent(v, "", "  "); err != nil {
@@ -136,4 +163,7 @@ func jsonVal(v any) string {
 	} else {
 		return string(data)
 	}
+}
+
+func (b Backend) Shutdown(ctx context.Context) {
 }

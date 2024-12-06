@@ -11,17 +11,88 @@ import (
 	"time"
 )
 
-type SpanOption interface {
-	ApplyToSpan(s *Span)
+type Option interface {
+	ApplyToStack(s *Stack)
 }
 
-func SpanOptionFunc(fn func(s *Span)) SpanOption { return applyToSpanFunc(fn) }
+var _ Option = OptionFunc(func(s *Stack) {})
 
-var _ SpanOption = applyToSpanFunc(func(s *Span) {})
+type OptionFunc func(s *Stack)
 
-type applyToSpanFunc func(s *Span)
+func (a OptionFunc) ApplyToStack(s *Stack) { a(s) }
 
-func (a applyToSpanFunc) ApplyToSpan(s *Span) { a(s) }
+//
+//  ▗▄▖ ▗▄▄▖▗▄▄▄▖▗▄▄▄▖ ▗▄▖ ▗▖  ▗▖ ▗▄▄▖
+// ▐▌ ▐▌▐▌ ▐▌ █    █  ▐▌ ▐▌▐▛▚▖▐▌▐▌
+// ▐▌ ▐▌▐▛▀▘  █    █  ▐▌ ▐▌▐▌ ▝▜▌ ▝▀▚▖
+// ▝▚▄▞▘▐▌    █  ▗▄█▄▖▝▚▄▞▘▐▌  ▐▌▗▄▄▞▘
+//
+
+var _ Option = Options{}
+
+type Options []Option
+
+func (options Options) Option(option Option) Options {
+	return append(options, option)
+}
+
+func (options Options) Backend(backend Backend) Options {
+	return append(options, OptionFunc(func(s *Stack) {
+		s.Backend = backend
+	}))
+}
+
+func (options Options) ServiceName(name string) Options {
+	return append(options, OptionFunc(func(s *Stack) {
+		s.Options.ServiceName = name
+	}))
+}
+
+func (options Options) ScopeAttrs(attrs ...Attr) Options {
+	return append(options, OptionFunc(func(s *Stack) {
+		s.Options.ScopeAttrs = append(s.Options.ScopeAttrs, attrs...)
+	}))
+}
+
+func (options Options) EmbedLogsIntoSpans(embed bool) Options {
+	return append(options, OptionFunc(func(s *Stack) {
+		s.Options.AddLogsToSpan = embed
+	}))
+}
+
+func (options Options) Name(name string) Options {
+	return append(options, OptionFunc(func(s *Stack) {
+		s.Span.Name = name
+	}))
+}
+
+func (options Options) TraceID(traceID []byte) Options {
+	return append(options, OptionFunc(func(s *Stack) {
+		if !TraceID(traceID).IsZero() {
+			s.Span.TraceID = TraceID(traceID)
+		}
+	}))
+}
+
+func (options Options) ParentSpanID(id []byte) Options {
+	return append(options, OptionFunc(func(s *Stack) {
+		if !ID(id).IsZero() {
+			s.Span.ParentSpanID = ID(id)
+		}
+	}))
+}
+
+func (options Options) Apply(ctx context.Context) context.Context {
+	s := Get(ctx).Clone()
+	options.ApplyToStack(s)
+	return Put(ctx, s)
+}
+
+func (options Options) ApplyToStack(s *Stack) {
+	for _, oFn := range options {
+		oFn.ApplyToStack(s)
+	}
+}
 
 //
 //  ▗▄▄▖ ▗▄▖ ▗▖  ▗▖▗▄▄▄▖▗▄▄▄▖▗▖  ▗▖▗▄▄▄▖
@@ -32,19 +103,17 @@ func (a applyToSpanFunc) ApplyToSpan(s *Span) { a(s) }
 
 type stackCtxKey struct{}
 
-func Get(ctx context.Context) *Span {
-	if s, ok := ctx.Value(stackCtxKey{}).(*Span); ok {
+func Get(ctx context.Context) *Stack {
+	if s, ok := ctx.Value(stackCtxKey{}).(*Stack); ok {
 		return s
 	} else {
-		return &Span{}
+		s := &Stack{}
+		s.Options.AddLogsToSpan = true
+		return s
 	}
 }
 
-func Clone(ctx context.Context, modFn func(s *Span)) *Span {
-	return Get(ctx).Clone(modFn)
-}
-
-func Put(ctx context.Context, s *Span) context.Context {
+func Put(ctx context.Context, s *Stack) context.Context {
 	return context.WithValue(ctx, stackCtxKey{}, s)
 }
 
@@ -55,6 +124,25 @@ func Put(ctx context.Context, s *Span) context.Context {
 // ▗▄▄▞▘▐▌   ▐▌ ▐▌▐▌  ▐▌
 //
 
+type Stack struct {
+	Span Span
+
+	Backend Backend
+
+	Options struct {
+		AttrPrefix    string
+		AddLogsToSpan bool
+
+		ServiceName string
+		ScopeAttrs  []Attr
+	}
+}
+
+func (s *Stack) Clone() *Stack {
+	cloned := *s
+	return &cloned
+}
+
 type Span struct {
 	ID           ID
 	ParentSpanID ID
@@ -62,28 +150,24 @@ type Span struct {
 
 	Name string
 
-	Time time.Time
+	Time    time.Time
+	EndTime time.Time
+
+	Error error
 
 	Attrs []Attr
 
-	Backend Backend
+	OwnLogs []SpanLog
 }
 
-func (s *Span) Clone(modFn func(s *Span)) *Span {
-	var cloned Span
-	if s != nil {
-		cloned = *s
-		cloned.Attrs = make([]Attr, len(s.Attrs))
-		copy(cloned.Attrs, s.Attrs)
-	}
+func (s Span) IsValid() bool {
+	return !s.ID.IsZero() && !s.TraceID.IsZero()
+}
 
-	cloned.Time = time.Now()
-
-	if modFn != nil {
-		modFn(&cloned)
-	}
-
-	return &cloned
+type SpanLog struct {
+	Time  time.Time
+	Name  string
+	Attrs []Attr
 }
 
 //
@@ -110,7 +194,11 @@ func (id TraceID) IsZero() bool {
 }
 
 func (id TraceID) Bytes() []byte {
-	return id[:]
+	if id.IsZero() {
+		return nil
+	} else {
+		return id[:]
+	}
 }
 
 func (id TraceID) String() string {
@@ -142,7 +230,11 @@ func (id ID) IsZero() bool {
 }
 
 func (id ID) Bytes() []byte {
-	return id[:]
+	if id.IsZero() {
+		return nil
+	} else {
+		return id[:]
+	}
 }
 
 func (id ID) String() string {

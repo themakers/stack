@@ -1,6 +1,7 @@
 package stack_backend_dummy
 
 import (
+	"context"
 	"github.com/themakers/stack/stack_backend"
 )
 
@@ -14,4 +15,7 @@ func New() stack_backend.Backend {
 
 func (b Backend) Handle(_ stack_backend.Event) {
 	//> Discard
+}
+
+func (b Backend) Shutdown(_ context.Context) {
 }

@@ -18,8 +18,8 @@ type rootCauseError struct {
 	spanID   string
 	cause    error
 	trace    *gostackparse.Goroutine
-	attrs    []stack.Attr
-	ownAttrs []stack.Attr
+	attrs    []stack.A
+	ownAttrs []stack.A
 }
 
 func (e *rootCauseError) Error() string {

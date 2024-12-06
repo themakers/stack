@@ -3,12 +3,11 @@ package main
 import (
 	"context"
 	"errors"
-	"github.com/themakers/stack/stack_backend/stack_backend_json"
-	"github.com/themakers/stack/stack_backend/stack_backend_otel"
 	"time"
 
 	"github.com/themakers/stack"
 	"github.com/themakers/stack/stack_backend"
+	"github.com/themakers/stack/stack_backend/stack_backend_otel_grpc"
 	"github.com/themakers/stack/stack_backend/stack_backend_text"
 	"github.com/themakers/stack/stack_stdlog"
 
@@ -19,22 +18,22 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	backendOTEL, closeBackendOTEL := stack_backend_otel.New("localhost:32751")
-	defer closeBackendOTEL()
+	ctx = stack.With().Backend(stack_backend.TeeBackend(
+		stack_backend_text.New(),
+		//stack_backend_json.New(),
+		stack_backend_otel_grpc.New("localhost:32751"),
+	)).ServiceName("stack-demo").ScopeAttrs(stack.Attr("build", "0xdeadbeef")).Apply(ctx)
 
-	ctx = stack.New(ctx,
-		stack_backend.TeeBackend(
-			stack_backend_text.New(),
-			stack_backend_json.New(),
-			backendOTEL,
-		),
-	)
+	defer stack_backend.Shutdown(ctx)
+
 	stack_stdlog.Hijack(ctx)
 
-	ctx, end := stack.Span(ctx, stack.A("buildnum", 100500))
+	ctx, end := stack.Span(ctx, stack.Attr("buildnum", 100500))
 	defer end()
 
-	stack.Log(ctx, "ajajajajajaja", "test", stack.A("test", map[string]any{"hello": "kitty", "bananas": 10}))
+	stack.Log(ctx, "ajajajajajaja", "test", stack.Attr("test", map[string]any{"hello": "kitty", "bananas": 10}))
+
+	time.Sleep(3 * time.Millisecond)
 
 	stack.TLog(ctx, log_events.TestRecord{
 		Name:         "j doe",
@@ -42,10 +41,12 @@ func main() {
 	})
 
 	(func() {
-		ctx, cancel := stack.Span(ctx, stack.AddName("spaaaaana"))
-		defer cancel()
+		ctx, end := stack.Span(ctx, stack.Name("spaaaaana"))
+		defer end()
 
-		stack.Info(ctx, "hello kitty", stack.A("user_name", "kenji kawai"))
+		time.Sleep(3 * time.Millisecond)
+
+		stack.Info(ctx, "hello kitty", stack.Attr("user_name", "kenji kawai"))
 
 		SpaaaaaaaaaanFunc(ctx)
 	})()
@@ -57,24 +58,5 @@ func SpaaaaaaaaaanFunc(ctx context.Context) {
 
 	stack.Error(ctx, "woooooork", errors.New("test-error"))
 
-	//err := _drafts.NewError(ctx, err, stack.A(), stack.A(), stack.A())
-	//if IsMND(err) {
-	//	MNDE{err}
-	//} else {
-	//	ISE{err}
-	//}
-
 	time.Sleep(10 * time.Millisecond)
-}
-
-type PermissionDeniedError struct {
-	cause error
-}
-
-type MNDE struct {
-	cause error
-}
-
-type ISE struct {
-	cause error
 }

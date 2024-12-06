@@ -12,15 +12,15 @@ const (
 	LevelSpanEnd = "span-"
 )
 
-var _ SpanOption = Attr{}
+var _ Option = Attr{}
 
 type Attr struct {
 	Name  string
 	Value any
 }
 
-func (a Attr) ApplyToSpan(s *Span) {
-	s.Attrs = append(s.Attrs, a)
+func (a Attr) ApplyToStack(s *Stack) {
+	s.Span.Attrs = append(s.Span.Attrs, a)
 }
 
 type RawAttrValue string
@@ -35,30 +35,34 @@ const (
 	//KindMetric
 )
 
+// TODO: Review/refactor
+
 type Event struct {
 	Kind Kind
 
-	ID       ID
-	ParentID ID
-	TraceID  TraceID
-	Name     string
+	State *Stack
+
+	LogEvent LogEvent
+
+	// TODO // File
+	// TODO // Line
+	// TODO // StackTrace []byte
+
+	//> Metric
+	// TODO
+}
+
+type LogEvent struct {
+	ID ID
+
+	Name string
 
 	Time time.Time
 
-	Attrs    []Attr
-	OwnAttrs []Attr
-
-	StackTrace []byte
-
-	//> Span End
-	EndTime time.Time
-
-	//> Log
 	Level      string
 	Error      error
 	Panic      any
 	IsTypedLog bool
 
-	//> Metric
-	// TODO
+	OwnAttrs []Attr
 }

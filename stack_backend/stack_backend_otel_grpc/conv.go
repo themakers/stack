@@ -1,4 +1,4 @@
-package stack_backend_otel
+package stack_backend_otel_grpc
 
 import (
 	"fmt"

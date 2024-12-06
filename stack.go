@@ -9,60 +9,27 @@ import (
 	"github.com/themakers/stack/stack_backend"
 )
 
-type Attr = stack_backend.Attr
+type A = stack_backend.Attr
 
-func A(name string, value any) Attr {
-	return Attr{Name: name, Value: value}
+func Attr(name string, value any) A {
+	return A{Name: name, Value: value}
 }
 
-func New(ctx context.Context, backend stack_backend.Backend) context.Context {
-	return stack_backend.Put(ctx, stack_backend.Clone(ctx, func(s *stack_backend.Span) {
-		s.Backend = backend
-	}))
-}
-
-//
+// COMMON
 //  ▗▄▖ ▗▄▄▖▗▄▄▄▖▗▄▄▄▖ ▗▄▖ ▗▖  ▗▖ ▗▄▄▖
 // ▐▌ ▐▌▐▌ ▐▌ █    █  ▐▌ ▐▌▐▛▚▖▐▌▐▌
 // ▐▌ ▐▌▐▛▀▘  █    █  ▐▌ ▐▌▐▌ ▝▜▌ ▝▀▚▖
 // ▝▚▄▞▘▐▌    █  ▗▄█▄▖▝▚▄▞▘▐▌  ▐▌▗▄▄▞▘
 //
 
-func Trace(traceID stack_backend.TraceID, parentSpanID stack_backend.ID) stack_backend.SpanOption {
-	return stack_backend.SpanOptionFunc(func(s *stack_backend.Span) {
-		if !traceID.IsZero() {
-			s.TraceID = traceID
-		} else {
-			s.TraceID = stack_backend.NewTraceID()
-		}
-
-		if !parentSpanID.IsZero() {
-			s.ParentSpanID = parentSpanID
-		} else {
-			s.ParentSpanID = s.ID
-		}
+func Name(name string) stack_backend.Option {
+	return stack_backend.OptionFunc(func(s *stack_backend.Stack) {
+		s.Span.Name = name
 	})
 }
 
-func Name(name string) stack_backend.SpanOption {
-	return stack_backend.SpanOptionFunc(func(s *stack_backend.Span) {
-		s.Name = name
-	})
-}
-
-func AddName(name string) stack_backend.SpanOption {
-	return stack_backend.SpanOptionFunc(func(s *stack_backend.Span) {
-		s.Name = fmt.Sprintf("%s: %s", s.Name, name)
-	})
-}
-
-// With TODO: Is this method helpful? Maybe just delete it?
-func With(ctx context.Context, opts ...stack_backend.SpanOption) context.Context {
-	return stack_backend.Put(ctx, stack_backend.Clone(ctx, func(s *stack_backend.Span) {
-		for _, o := range opts {
-			o.ApplyToSpan(s)
-		}
-	}))
+func With() stack_backend.Options {
+	return stack_backend.Options{}
 }
 
 //
@@ -74,45 +41,37 @@ func With(ctx context.Context, opts ...stack_backend.SpanOption) context.Context
 
 type endFunc func()
 
-func Span(ctx context.Context, opts ...stack_backend.SpanOption) (context.Context, endFunc) {
-	var s = stack_backend.Clone(ctx, nil)
+func Span(ctx context.Context, opts ...stack_backend.Option) (context.Context, endFunc) {
+	var s = stack_backend.Get(ctx).Clone()
 
-	if s.TraceID.IsZero() {
-		s.TraceID = stack_backend.NewTraceID()
+	s.Span.Time = time.Now()
+	s.Span.OwnLogs = []stack_backend.SpanLog{}
+
+	if s.Span.TraceID.IsZero() {
+		s.Span.TraceID = stack_backend.NewTraceID()
 	}
 
-	s.ParentSpanID = s.ID
-	s.ID = stack_backend.NewID()
+	s.Span.ParentSpanID = s.Span.ID
+	s.Span.ID = stack_backend.NewID()
 
-	s.Name, _, _ = stack_backend.Operation(0)
-	s.Name = fmt.Sprint(s.Name, "()") // ???
+	s.Span.Name, _, _ = stack_backend.Operation(0)
+	s.Span.Name = fmt.Sprint(s.Span.Name, "()") // ???
 
-	for _, o := range opts {
-		o.ApplyToSpan(s)
-	}
+	//> Apply options from arguments
+	stack_backend.Options(opts).ApplyToStack(s)
 
 	ctx = stack_backend.Put(ctx, s)
 
 	s.Backend.Handle(stack_backend.Event{
-		Kind:     stack_backend.KindSpan,
-		ID:       s.ID,
-		ParentID: s.ParentSpanID,
-		TraceID:  s.TraceID,
-		Name:     s.Name,
-		Time:     s.Time,
-		Attrs:    s.Attrs,
+		Kind:  stack_backend.KindSpan,
+		State: s,
 	})
 
 	return ctx, func() {
+		s.Span.EndTime = time.Now()
 		s.Backend.Handle(stack_backend.Event{
-			Kind:     stack_backend.KindSpanEnd,
-			ID:       s.ID,
-			ParentID: s.ParentSpanID,
-			TraceID:  s.TraceID,
-			Name:     s.Name,
-			Time:     s.Time,
-			Attrs:    s.Attrs,
-			EndTime:  time.Now(),
+			Kind:  stack_backend.KindSpanEnd,
+			State: s,
 		})
 	}
 }
@@ -124,20 +83,40 @@ func Span(ctx context.Context, opts ...stack_backend.SpanOption) (context.Contex
 // ▐▙▄▄▖▝▚▄▞▘▝▚▄▞▘▝▚▄▞▘▗▄█▄▖▐▌  ▐▌▝▚▄▞▘
 //
 
-func log(ctx context.Context, level, name string, err error, attrs ...Attr) {
-	var s = stack_backend.Get(ctx)
+func log(ctx context.Context, level, name string, err error, attrs ...A) {
+
+	var (
+		t = time.Now()
+		s = stack_backend.Get(ctx)
+	)
+
+	if s.Options.AddLogsToSpan {
+		l := stack_backend.SpanLog{
+			Time:  t,
+			Name:  name,
+			Attrs: append(attrs, Attr("level", level)),
+		}
+		if err != nil {
+			l.Attrs = append(l.Attrs, Attr("error", err))
+		}
+		s.Span.OwnLogs = append(s.Span.OwnLogs, l)
+	}
+
+	if err != nil {
+		s.Span.Error = err
+	}
 
 	var e = stack_backend.Event{
-		Kind:     stack_backend.KindLog,
-		ID:       stack_backend.NewID(),
-		ParentID: s.ID,
-		TraceID:  s.TraceID,
-		Attrs:    s.Attrs,
-		Time:     time.Now(),
-		Name:     name,
-		Level:    level,
-		OwnAttrs: attrs,
-		Error:    err,
+		Kind:  stack_backend.KindLog,
+		State: s.Clone(),
+		LogEvent: stack_backend.LogEvent{
+			ID:       stack_backend.NewID(),
+			Time:     t,
+			Name:     name,
+			Level:    level,
+			OwnAttrs: attrs,
+			Error:    err,
+		},
 	}
 
 	if err != nil {
@@ -147,23 +126,23 @@ func log(ctx context.Context, level, name string, err error, attrs ...Attr) {
 	s.Backend.Handle(e)
 }
 
-func Log(ctx context.Context, level, name string, attrs ...Attr) {
+func Log(ctx context.Context, level, name string, attrs ...A) {
 	log(ctx, level, name, nil, attrs...)
 }
 
-func Debug(ctx context.Context, name string, attrs ...Attr) {
+func Debug(ctx context.Context, name string, attrs ...A) {
 	log(ctx, stack_backend.LevelDebug, name, nil, attrs...)
 }
 
-func Info(ctx context.Context, name string, attrs ...Attr) {
+func Info(ctx context.Context, name string, attrs ...A) {
 	log(ctx, stack_backend.LevelInfo, name, nil, attrs...)
 }
 
-func Warn(ctx context.Context, name string, attrs ...Attr) {
+func Warn(ctx context.Context, name string, attrs ...A) {
 	log(ctx, stack_backend.LevelWarn, name, nil, attrs...)
 }
 
-func Error(ctx context.Context, name string, err error, attrs ...Attr) error {
+func Error(ctx context.Context, name string, err error, attrs ...A) error {
 	log(ctx, stack_backend.LevelError, name, err, attrs...)
 	return nil
 }
@@ -189,17 +168,24 @@ func TLog(ctx context.Context, typed any) {
 
 	fullName := fmt.Sprintf("%s.%s", typ.PkgPath(), typ.Name())
 
-	var attrs []Attr
+	var attrs []A
 	for i := 0; i < val.NumField(); i++ {
-		field := typ.Field(i)
-		fieldValue := val.Field(i)
+		var (
+			field      = typ.Field(i)
+			fieldName  = field.Name
+			fieldValue = val.Field(i)
+		)
 
 		if !fieldValue.CanInterface() {
 			continue
 		}
 
-		attrs = append(attrs, Attr{
-			Name:  field.Name,
+		if name, ok := field.Tag.Lookup("name"); ok {
+			fieldName = name
+		}
+
+		attrs = append(attrs, A{
+			Name:  fieldName,
 			Value: fieldValue.Interface(),
 		})
 	}
@@ -214,6 +200,7 @@ func TLog(ctx context.Context, typed any) {
 // ▐▙▄▄▖▐▌ ▐▌▐▌ ▐▌▝▚▄▞▘▐▌ ▐▌▗▄▄▞▘
 //
 
+// TODO
 func Recover(ctx context.Context, rFn func(rec any)) {
 	if rec := recover(); rec != nil {
 		rFn(rec)

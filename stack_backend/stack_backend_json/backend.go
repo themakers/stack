@@ -1,6 +1,7 @@
 package stack_backend_json
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 
@@ -21,4 +22,7 @@ func (b Backend) Handle(e stack_backend.Event) {
 	} else if _, err := os.Stdout.Write(data); err != nil {
 		panic(err)
 	}
+}
+
+func (b Backend) Shutdown(ctx context.Context) {
 }
