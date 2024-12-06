@@ -2,14 +2,14 @@ package stack_backend_otel_grpc
 
 import (
 	"context"
+	common_model_v1 "go.opentelemetry.io/proto/otlp/common/v1"
+	logs_model_v1 "go.opentelemetry.io/proto/otlp/logs/v1"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
 	logs_v1 "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	trace_v1 "go.opentelemetry.io/proto/otlp/collector/trace/v1"
-	common_model_v1 "go.opentelemetry.io/proto/otlp/common/v1"
-	logs_model_v1 "go.opentelemetry.io/proto/otlp/logs/v1"
 	resource_model_v1 "go.opentelemetry.io/proto/otlp/resource/v1"
 	trace_model_v1 "go.opentelemetry.io/proto/otlp/trace/v1"
 
@@ -38,14 +38,11 @@ func New(target string) stack_backend.Backend {
 }
 
 func (b Backend) Handle(e stack_backend.Event) {
-	if e.Kind&stack_backend.KindSpanEnd == 0 {
-		return
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	{
+	if e.Kind&stack_backend.KindSpanEnd != 0 {
+
 		span := &trace_model_v1.Span{
 			Name:              e.State.Span.Name,
 			TraceId:           e.State.Span.TraceID.Bytes(),
@@ -101,20 +98,40 @@ func (b Backend) Handle(e stack_backend.Event) {
 		} else {
 			println(res.PartialSuccess)
 		}
-	}
 
-	if false {
+	} else if e.Kind&stack_backend.KindLog != 0 {
+
+		log := &logs_model_v1.LogRecord{
+			Body: &common_model_v1.AnyValue{
+				Value: &common_model_v1.AnyValue_StringValue{
+					StringValue: e.LogEvent.Name,
+				},
+			},
+			SeverityNumber: logs_model_v1.SeverityNumber_SEVERITY_NUMBER_INFO,
+			SeverityText:   stack_backend.LevelInfo,
+			Attributes:     attrsToKeyValue(e.LogEvent.OwnAttrs),
+			TimeUnixNano:   uint64(e.LogEvent.Time.UnixNano()),
+		}
+
+		if !e.State.Span.ID.IsZero() {
+			log.TraceId = e.State.Span.TraceID.Bytes()
+			log.SpanId = e.State.Span.ID.Bytes()
+
+			log.Attributes = append(log.Attributes, attrsToKeyValue(e.State.Span.Attrs)...)
+		}
+
 		if res, err := b.logs.Export(ctx, &logs_v1.ExportLogsServiceRequest{
 			ResourceLogs: []*logs_model_v1.ResourceLogs{
 				{
-					Resource: &resource_model_v1.Resource{},
+					Resource: &resource_model_v1.Resource{
+						Attributes: attrsToKeyValue([]stack_backend.Attr{
+							{Name: "service.name", Value: e.State.Options.ServiceName},
+						}),
+					},
 					ScopeLogs: []*logs_model_v1.ScopeLogs{
 						{
-							Scope: &common_model_v1.InstrumentationScope{},
 							LogRecords: []*logs_model_v1.LogRecord{
-								{
-									Attributes: []*common_model_v1.KeyValue{},
-								},
+								log,
 							},
 						},
 					},
@@ -125,7 +142,9 @@ func (b Backend) Handle(e stack_backend.Event) {
 		} else {
 			println(res.PartialSuccess)
 		}
+
 	}
+
 }
 
 func (b Backend) Shutdown(ctx context.Context) {
