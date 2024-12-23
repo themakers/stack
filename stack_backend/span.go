@@ -6,7 +6,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"runtime"
 	"time"
 )
@@ -33,7 +35,11 @@ var _ Option = Options{}
 type Options []Option
 
 func (options Options) Option(option Option) Options {
-	return append(options, option)
+	if option != nil {
+		return append(options, option)
+	} else {
+		return options
+	}
 }
 
 func (options Options) Backend(backend Backend) Options {
@@ -51,6 +57,12 @@ func (options Options) ServiceName(name string) Options {
 func (options Options) ScopeAttrs(attrs ...Attr) Options {
 	return append(options, OptionFunc(func(s *Stack) {
 		s.Options.ScopeAttrs = append(s.Options.ScopeAttrs, attrs...)
+	}))
+}
+
+func (options Options) Attrs(attrs ...Attr) Options {
+	return append(options, OptionFunc(func(s *Stack) {
+		s.Span.Attrs = append(s.Span.Attrs, attrs...)
 	}))
 }
 
@@ -82,6 +94,16 @@ func (options Options) ParentSpanID(id []byte) Options {
 	}))
 }
 
+func (options Options) W3CTraceContext(traceparent, tracestate string) Options {
+	return append(options, OptionFunc(func(s *Stack) {
+	}))
+}
+
+func (options Options) W3CTraceContextFromRequest(q *http.Request) Options {
+	return append(options, OptionFunc(func(s *Stack) {
+	}))
+}
+
 func (options Options) Apply(ctx context.Context) context.Context {
 	s := Get(ctx).Clone()
 	options.ApplyToStack(s)
@@ -90,7 +112,9 @@ func (options Options) Apply(ctx context.Context) context.Context {
 
 func (options Options) ApplyToStack(s *Stack) {
 	for _, oFn := range options {
-		oFn.ApplyToStack(s)
+		if oFn != nil {
+			oFn.ApplyToStack(s)
+		}
 	}
 }
 
@@ -188,6 +212,17 @@ func NewTraceID() (id TraceID) {
 	return id
 }
 
+func TraceIDFromString(hx string) (id TraceID, err error) {
+	if v, err := hex.DecodeString(hx); err != nil {
+		return id, err
+	} else if len(v) != len(id) {
+		return id, errors.New("malformed trace id")
+	} else {
+		copy(id[:], v)
+		return id, err
+	}
+}
+
 func (id TraceID) IsZero() bool {
 	var id0 TraceID
 	return bytes.Equal(id[:], id0[:])
@@ -222,6 +257,17 @@ func NewID() (id ID) {
 		panic(err)
 	}
 	return id
+}
+
+func IDFromString(hx string) (id ID, err error) {
+	if v, err := hex.DecodeString(hx); err != nil {
+		return id, err
+	} else if len(v) != len(id) {
+		return id, errors.New("malformed id")
+	} else {
+		copy(id[:], v)
+		return id, err
+	}
 }
 
 func (id ID) IsZero() bool {

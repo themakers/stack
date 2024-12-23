@@ -2,14 +2,14 @@ package stack_backend_otel_grpc
 
 import (
 	"context"
-	common_model_v1 "go.opentelemetry.io/proto/otlp/common/v1"
-	logs_model_v1 "go.opentelemetry.io/proto/otlp/logs/v1"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
 	logs_v1 "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	trace_v1 "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	common_model_v1 "go.opentelemetry.io/proto/otlp/common/v1"
+	logs_model_v1 "go.opentelemetry.io/proto/otlp/logs/v1"
 	resource_model_v1 "go.opentelemetry.io/proto/otlp/resource/v1"
 	trace_model_v1 "go.opentelemetry.io/proto/otlp/trace/v1"
 

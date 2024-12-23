@@ -2,6 +2,7 @@ package stack
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -26,6 +27,19 @@ func Name(name string) stack_backend.Option {
 	return stack_backend.OptionFunc(func(s *stack_backend.Stack) {
 		s.Span.Name = name
 	})
+}
+
+func Op() op {
+	var name, _, _ = stack_backend.Operation(0)
+	return op(name)
+}
+
+var _ stack_backend.Option = op("")
+
+type op string
+
+func (o op) ApplyToStack(s *stack_backend.Stack) {
+	s.Span.Name = string(o)
 }
 
 func With() stack_backend.Options {
@@ -145,6 +159,10 @@ func Warn(ctx context.Context, name string, attrs ...A) {
 func Error(ctx context.Context, name string, err error, attrs ...A) error {
 	log(ctx, stack_backend.LevelError, name, err, attrs...)
 	return nil
+}
+
+func Panic(p any) error {
+	return errors.New(fmt.Sprint(p))
 }
 
 // TODO
