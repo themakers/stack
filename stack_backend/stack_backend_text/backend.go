@@ -39,6 +39,10 @@ type record struct {
 	Level      string
 	LevelColor *color.Color
 
+	File          string
+	Line          int
+	FileLineColor *color.Color
+
 	Name      string
 	NameColor *color.Color
 
@@ -60,9 +64,13 @@ type record struct {
 func (b Backend) write(w io.Writer, isTTY bool, r record) error {
 	buf := bytes.NewBuffer([]byte{})
 
-	buf.WriteString(r.Time.Format(timeFormat))
+	buf.WriteString(r.TimeColor.Sprint(r.Time.Format(timeFormat)))
 	buf.WriteString(" ")
 	buf.WriteString(r.LevelColor.Sprintf(" %-5s ", r.Level))
+	if len(r.File) > 0 {
+		buf.WriteString(" ")
+		buf.WriteString(r.FileLineColor.Sprintf("%s:%d", filepath.Base(r.File), r.Line))
+	}
 	buf.WriteString(" ")
 	buf.WriteString(r.NameColor.Sprint(r.Name))
 
@@ -144,6 +152,8 @@ func (b Backend) write(w io.Writer, isTTY bool, r record) error {
 func (b Backend) Handle(e stack_backend.Event) {
 	var r record
 
+	r.TimeColor = color.New()
+	r.FileLineColor = color.New()
 	r.NestedAttrsColor = color.New().AddRGB(128, 128, 128)
 	r.OwnAttrsColor = color.New(color.FgHiWhite)
 	r.NameColor = color.New(color.FgMagenta)
@@ -153,6 +163,9 @@ func (b Backend) Handle(e stack_backend.Event) {
 		r.Name = e.State.Span.Name
 		r.Level = stack_backend.LevelSpan
 		r.LevelColor = color.New(color.FgWhite)
+		r.File = e.State.Span.File
+		r.Line = e.State.Span.Line
+		r.Time = e.State.Span.Time
 		r.OwnAttrs = e.State.Span.Attrs
 	} else if e.Kind&stack_backend.KindSpanEnd != 0 {
 		r.Name = e.State.Span.Name
@@ -169,6 +182,9 @@ func (b Backend) Handle(e stack_backend.Event) {
 		r.OwnAttrs = e.LogEvent.OwnAttrs
 		r.Name = e.LogEvent.Name
 		r.Level = e.LogEvent.Level
+		r.Time = e.LogEvent.Time
+		r.File = e.LogEvent.File
+		r.Line = e.LogEvent.Line
 		if e.LogEvent.Error != nil {
 			r.Error = fmt.Sprint(e.LogEvent.Error)
 			r.StackTrace = e.LogEvent.StackTrace

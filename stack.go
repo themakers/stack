@@ -69,7 +69,7 @@ func Span(ctx context.Context, opts ...stack_backend.Option) (context.Context, e
 	s.Span.ParentSpanID = s.Span.ID
 	s.Span.ID = stack_backend.NewID()
 
-	s.Span.Name, _, _ = stack_backend.Operation(0)
+	s.Span.Name, s.Span.File, s.Span.Line = stack_backend.Operation(0)
 	s.Span.Name = fmt.Sprint(s.Span.Name, "()") // ???
 
 	//> Apply options from arguments
@@ -101,8 +101,9 @@ func Span(ctx context.Context, opts ...stack_backend.Option) (context.Context, e
 func log(ctx context.Context, level, name string, err error, st *gostackparse.Goroutine, attrs ...A) {
 
 	var (
-		t = time.Now()
-		s = stack_backend.Get(ctx)
+		t             = time.Now()
+		s             = stack_backend.Get(ctx)
+		_, file, line = stack_backend.Operation(1)
 	)
 
 	if s.Options.AddLogsToSpan {
@@ -133,6 +134,8 @@ func log(ctx context.Context, level, name string, err error, st *gostackparse.Go
 			OwnAttrs:   attrs,
 			Error:      err,
 			StackTrace: st,
+			File:       file,
+			Line:       line,
 		},
 	}
 
@@ -160,7 +163,6 @@ func Warn(ctx context.Context, name string, attrs ...A) {
 }
 
 func Error(ctx context.Context, name string, err error, attrs ...A) error {
-
 	log(ctx, stack_backend.LevelError, name, err, stack_backend.Stacktrace(0), attrs...)
 	return nil
 }

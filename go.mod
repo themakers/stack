@@ -3,13 +3,13 @@ module github.com/themakers/stack
 go 1.23.1
 
 require (
+	github.com/DataDog/gostackparse v0.7.0
 	github.com/fatih/color v1.18.0
 	go.opentelemetry.io/proto/otlp v1.3.1
 	google.golang.org/grpc v1.67.1
 )
 
 require (
-	github.com/DataDog/gostackparse v0.7.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.23.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect

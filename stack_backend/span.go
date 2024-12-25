@@ -175,6 +175,9 @@ type Span struct {
 	TraceID      TraceID
 
 	Name string
+	
+	File string
+	Line int
 
 	Time    time.Time
 	EndTime time.Time

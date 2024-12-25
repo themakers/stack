@@ -60,6 +60,9 @@ type LogEvent struct {
 
 	Name string
 
+	File string
+	Line int
+
 	Time time.Time
 
 	Level      string
