@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"github.com/DataDog/gostackparse"
 	"github.com/fatih/color"
 	"github.com/themakers/stack/stack_backend"
 	"io"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -37,6 +42,9 @@ type record struct {
 	Name      string
 	NameColor *color.Color
 
+	Error      string
+	ErrorColor *color.Color
+
 	Duration      time.Duration
 	DurationColor *color.Color
 
@@ -45,6 +53,8 @@ type record struct {
 
 	NestedAttrs      []stack_backend.Attr
 	NestedAttrsColor *color.Color
+
+	StackTrace *gostackparse.Goroutine
 }
 
 func (b Backend) write(w io.Writer, isTTY bool, r record) error {
@@ -59,6 +69,11 @@ func (b Backend) write(w io.Writer, isTTY bool, r record) error {
 	if r.Duration != 0 {
 		buf.WriteString(" ")
 		buf.WriteString(r.OwnAttrsColor.Sprint(r.Duration))
+	}
+
+	if r.Error != "" {
+		buf.WriteString(" ")
+		buf.WriteString(r.ErrorColor.Sprint(r.Error))
 	}
 
 	//buf.WriteString(" {")
@@ -99,6 +114,26 @@ func (b Backend) write(w io.Writer, isTTY bool, r record) error {
 	//buf.WriteString(" }\n")
 	buf.WriteString("\n")
 
+	if r.StackTrace != nil {
+		for _, frm := range r.StackTrace.Stack {
+			buf.WriteString("     ••• ")
+			buf.WriteString(frm.Func)
+			buf.WriteString("\n")
+			buf.WriteString("                 ")
+
+			seg := strings.Split(frm.File, string(rune(filepath.Separator)))
+			if len(seg) >= 5 {
+				seg = seg[len(seg)-5:]
+			}
+
+			buf.WriteString(filepath.Join(seg...))
+			buf.WriteString(":")
+			buf.WriteString(strconv.Itoa(frm.Line))
+			buf.WriteString(" ••• ")
+			buf.WriteString("\n")
+		}
+	}
+
 	if _, err := buf.WriteTo(w); err != nil {
 		return err
 	} else {
@@ -112,6 +147,7 @@ func (b Backend) Handle(e stack_backend.Event) {
 	r.NestedAttrsColor = color.New().AddRGB(128, 128, 128)
 	r.OwnAttrsColor = color.New(color.FgHiWhite)
 	r.NameColor = color.New(color.FgMagenta)
+	r.ErrorColor = color.New(color.FgRed, color.BgWhite)
 
 	if e.Kind&stack_backend.KindSpan != 0 {
 		r.Name = e.State.Span.Name
@@ -125,11 +161,18 @@ func (b Backend) Handle(e stack_backend.Event) {
 		r.Time = e.State.Span.EndTime
 		r.Duration = e.State.Span.EndTime.Sub(e.State.Span.Time)
 		r.OwnAttrs = e.State.Span.Attrs
+		if e.State.Span.Error != nil {
+			r.Error = fmt.Sprint(e.State.Span.Error)
+		}
 	} else if e.Kind&stack_backend.KindLog != 0 {
 		r.NestedAttrs = e.State.Span.Attrs
 		r.OwnAttrs = e.LogEvent.OwnAttrs
 		r.Name = e.LogEvent.Name
 		r.Level = e.LogEvent.Level
+		if e.LogEvent.Error != nil {
+			r.Error = fmt.Sprint(e.LogEvent.Error)
+			r.StackTrace = e.LogEvent.StackTrace
+		}
 		switch e.LogEvent.Level {
 		case stack_backend.LevelDebug:
 			r.LevelColor = color.New(color.FgBlack, color.BgHiWhite)
@@ -148,14 +191,6 @@ func (b Backend) Handle(e stack_backend.Event) {
 		panic(err)
 	}
 }
-
-//type ColorOptions struct {
-//}
-//
-//type Options struct {
-//	Colors ColorOptions
-//}
-//
 
 func jsonVal(v any) string {
 	if data, err := json.MarshalIndent(v, "", "  "); err != nil {

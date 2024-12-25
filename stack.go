@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/DataDog/gostackparse"
 	"reflect"
 	"time"
 
@@ -97,7 +98,7 @@ func Span(ctx context.Context, opts ...stack_backend.Option) (context.Context, e
 // ▐▙▄▄▖▝▚▄▞▘▝▚▄▞▘▝▚▄▞▘▗▄█▄▖▐▌  ▐▌▝▚▄▞▘
 //
 
-func log(ctx context.Context, level, name string, err error, attrs ...A) {
+func log(ctx context.Context, level, name string, err error, st *gostackparse.Goroutine, attrs ...A) {
 
 	var (
 		t = time.Now()
@@ -116,20 +117,22 @@ func log(ctx context.Context, level, name string, err error, attrs ...A) {
 		s.Span.OwnLogs = append(s.Span.OwnLogs, l)
 	}
 
-	if err != nil {
+	if err != nil && s.Span.Error == nil {
 		s.Span.Error = err
+		s.Span.ErrorStackTrace = st
 	}
 
 	var e = stack_backend.Event{
 		Kind:  stack_backend.KindLog,
 		State: s.Clone(),
 		LogEvent: stack_backend.LogEvent{
-			ID:       stack_backend.NewID(),
-			Time:     t,
-			Name:     name,
-			Level:    level,
-			OwnAttrs: attrs,
-			Error:    err,
+			ID:         stack_backend.NewID(),
+			Time:       t,
+			Name:       name,
+			Level:      level,
+			OwnAttrs:   attrs,
+			Error:      err,
+			StackTrace: st,
 		},
 	}
 
@@ -141,23 +144,24 @@ func log(ctx context.Context, level, name string, err error, attrs ...A) {
 }
 
 func Log(ctx context.Context, level, name string, attrs ...A) {
-	log(ctx, level, name, nil, attrs...)
+	log(ctx, level, name, nil, nil, attrs...)
 }
 
 func Debug(ctx context.Context, name string, attrs ...A) {
-	log(ctx, stack_backend.LevelDebug, name, nil, attrs...)
+	log(ctx, stack_backend.LevelDebug, name, nil, nil, attrs...)
 }
 
 func Info(ctx context.Context, name string, attrs ...A) {
-	log(ctx, stack_backend.LevelInfo, name, nil, attrs...)
+	log(ctx, stack_backend.LevelInfo, name, nil, nil, attrs...)
 }
 
 func Warn(ctx context.Context, name string, attrs ...A) {
-	log(ctx, stack_backend.LevelWarn, name, nil, attrs...)
+	log(ctx, stack_backend.LevelWarn, name, nil, nil, attrs...)
 }
 
 func Error(ctx context.Context, name string, err error, attrs ...A) error {
-	log(ctx, stack_backend.LevelError, name, err, attrs...)
+
+	log(ctx, stack_backend.LevelError, name, err, stack_backend.Stacktrace(0), attrs...)
 	return nil
 }
 
@@ -208,7 +212,7 @@ func TLog(ctx context.Context, typed any) {
 		})
 	}
 
-	log(ctx, stack_backend.LevelInfo, fullName, nil, attrs...)
+	log(ctx, stack_backend.LevelInfo, fullName, nil, nil, attrs...)
 }
 
 //

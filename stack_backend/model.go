@@ -1,6 +1,9 @@
 package stack_backend
 
-import "time"
+import (
+	"github.com/DataDog/gostackparse"
+	"time"
+)
 
 const (
 	LevelDebug = "debug"
@@ -64,5 +67,6 @@ type LogEvent struct {
 	Panic      any
 	IsTypedLog bool
 
-	OwnAttrs []Attr
+	OwnAttrs   []Attr
+	StackTrace *gostackparse.Goroutine
 }

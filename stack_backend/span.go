@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/DataDog/gostackparse"
 	"net/http"
 	"runtime"
+	"runtime/debug"
 	"time"
 )
 
@@ -177,7 +179,8 @@ type Span struct {
 	Time    time.Time
 	EndTime time.Time
 
-	Error error
+	Error           error
+	ErrorStackTrace *gostackparse.Goroutine
 
 	Attrs []Attr
 
@@ -308,4 +311,22 @@ func Operation(skip int) (funcName string, file string, line int) {
 	} else {
 		return unknown, unknown, -1
 	}
+}
+
+func Stacktrace(skip int) *gostackparse.Goroutine {
+	const baseSkip = 2
+
+	s := debug.Stack()
+
+	goroutines, errs := gostackparse.Parse(bytes.NewReader(s))
+
+	if len(errs) > 0 {
+		println("malformed stacktrace:", string(s))
+	}
+
+	goroutine := goroutines[0]
+
+	goroutine.Stack = goroutine.Stack[baseSkip+skip:]
+
+	return goroutine
 }
