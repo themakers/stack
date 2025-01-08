@@ -164,7 +164,7 @@ func Warn(ctx context.Context, name string, attrs ...A) {
 
 func Error(ctx context.Context, name string, err error, attrs ...A) error {
 	log(ctx, stack_backend.LevelError, name, err, stack_backend.Stacktrace(0), attrs...)
-	return nil
+	return err
 }
 
 func Panic(p any) error {
