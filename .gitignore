@@ -1,6 +1,9 @@
 .idea
 *.iml
 
+
+/_drafts
+
 /tmp
 
 /test/demo/volumes

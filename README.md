@@ -13,7 +13,9 @@
 
 
 
-* Instantly find out any error origin
+* Reduce boilerplate
+* Lower the entry threshold
+* Instantly find out any error origin 
 * Simplify and unify tracing and logging patterns
 * Automatically attach context fields to spans
 * Support pluggable tracing backends

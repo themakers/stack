@@ -17,6 +17,10 @@ func Attr(name string, value any) A {
 	return A{Name: name, Value: value}
 }
 
+func F(name string, value any) A {
+	return A{Name: name, Value: value}
+}
+
 // COMMON
 //  ▗▄▖ ▗▄▄▖▗▄▄▄▖▗▄▄▄▖ ▗▄▖ ▗▖  ▗▖ ▗▄▄▖
 // ▐▌ ▐▌▐▌ ▐▌ █    █  ▐▌ ▐▌▐▛▚▖▐▌▐▌
