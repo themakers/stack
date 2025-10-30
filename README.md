@@ -12,6 +12,14 @@
  - [ ] StdLog impl
 
 
+logging
+tracing
+metrics
+profiling
+telemetry
+
+
+
 
 * Reduce boilerplate
 * Lower the entry threshold

@@ -5,7 +5,7 @@ go 1.24.5
 require (
 	github.com/DataDog/gostackparse v0.7.0
 	github.com/fatih/color v1.18.0
-	github.com/themakers/replay v0.0.0-20250826123912-27dab051fc94
+	github.com/themakers/replay v0.0.0-20250827203257-ed4b2909b2e9
 	go.opentelemetry.io/proto/otlp v1.7.1
 	google.golang.org/grpc v1.75.0
 )

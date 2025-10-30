@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/DataDog/gostackparse"
 	"reflect"
+	"runtime/debug"
 	"time"
+
+	"github.com/DataDog/gostackparse"
 
 	"github.com/themakers/stack/stack_backend"
 )
@@ -49,6 +51,30 @@ func (o op) ApplyToStack(s *stack_backend.Stack) {
 
 func With() stack_backend.Options {
 	return stack_backend.Options{}
+}
+
+func WithVCSFields() stack_backend.Option {
+	info, ok := debug.ReadBuildInfo()
+	return stack_backend.OptionFunc(func(sb *stack_backend.Stack) {
+		if ok {
+			for _, s := range info.Settings {
+				switch s.Key {
+				case "vcs":
+					//s.Value
+				case "vcs.revision":
+					sb.Options.ScopeAttrs = append(sb.Options.ScopeAttrs, F("vcs.revision", s.Value))
+				case "vcs.time":
+					// RFC3339 (e.g., "2024-11-01T12:34:56Z")
+					if t, err := time.Parse(time.RFC3339, s.Value); err == nil {
+						sb.Options.ScopeAttrs = append(sb.Options.ScopeAttrs, F("vcs.time", t))
+					}
+				case "vcs.modified":
+					//sb.Span.Attrs = append(sb.Span.Attrs, ...)
+					sb.Options.ScopeAttrs = append(sb.Options.ScopeAttrs, F("vcs.modified", s.Value))
+				}
+			}
+		}
+	})
 }
 
 //
