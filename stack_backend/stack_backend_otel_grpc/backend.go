@@ -120,7 +120,7 @@ func (b Backend) Handle(e stack_backend.Event) {
 			log.Attributes = append(log.Attributes, attrsToKeyValue(e.State.Span.Attrs)...)
 		}
 
-		if res, err := b.logs.Export(ctx, &logs_v1.ExportLogsServiceRequest{
+		if _, err := b.logs.Export(ctx, &logs_v1.ExportLogsServiceRequest{
 			ResourceLogs: []*logs_model_v1.ResourceLogs{
 				{
 					Resource: &resource_model_v1.Resource{
@@ -140,7 +140,7 @@ func (b Backend) Handle(e stack_backend.Event) {
 		}); err != nil {
 			panic(err)
 		} else {
-			println(res.PartialSuccess)
+			//println(res.PartialSuccess)
 		}
 
 	}
