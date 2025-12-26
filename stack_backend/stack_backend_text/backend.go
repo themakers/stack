@@ -5,15 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/DataDog/gostackparse"
-	"github.com/fatih/color"
-	"github.com/themakers/stack/stack_backend"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/DataDog/gostackparse"
+	"github.com/fatih/color"
+	"github.com/themakers/stack/stack_backend"
 )
 
 const timeFormat = "2006-01-02 15:04:05.000000000"
@@ -86,6 +88,7 @@ func (b Backend) write(w io.Writer, isTTY bool, r record) error {
 
 	//buf.WriteString(" {")
 	for i, f := range r.OwnAttrs {
+		log.Println(f.Name)
 		buf.WriteString(" ")
 		var v any
 		switch f.Value.(type) {

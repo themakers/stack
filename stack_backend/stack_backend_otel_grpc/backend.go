@@ -68,7 +68,7 @@ func (b Backend) Handle(e stack_backend.Event) {
 			}
 		}
 
-		if res, err := b.traces.Export(ctx, &trace_v1.ExportTraceServiceRequest{
+		if _, err := b.traces.Export(ctx, &trace_v1.ExportTraceServiceRequest{
 			ResourceSpans: []*trace_model_v1.ResourceSpans{
 				{
 					Resource: &resource_model_v1.Resource{
@@ -96,7 +96,7 @@ func (b Backend) Handle(e stack_backend.Event) {
 		}); err != nil {
 			panic(err)
 		} else {
-			println(res.PartialSuccess)
+			//println(res.PartialSuccess)
 		}
 
 	} else if e.Kind&stack_backend.KindLog != 0 {
