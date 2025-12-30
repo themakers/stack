@@ -88,7 +88,6 @@ func (b Backend) write(w io.Writer, isTTY bool, r record) error {
 
 	//buf.WriteString(" {")
 	for i, f := range r.OwnAttrs {
-		log.Println(f.Name)
 		buf.WriteString(" ")
 		var v any
 		switch f.Value.(type) {
