@@ -8,11 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/DataDog/gostackparse"
 	"net/http"
 	"runtime"
 	"runtime/debug"
 	"time"
+
+	"github.com/DataDog/gostackparse"
 )
 
 type Option interface {
@@ -53,6 +54,18 @@ func (options Options) Backend(backend Backend) Options {
 func (options Options) ServiceName(name string) Options {
 	return append(options, OptionFunc(func(s *Stack) {
 		s.Options.ServiceName = name
+	}))
+}
+
+func (options Options) Environment(name string) Options {
+	return append(options, OptionFunc(func(s *Stack) {
+		s.Options.Environment = name
+	}))
+}
+
+func (options Options) Instance(name string) Options {
+	return append(options, OptionFunc(func(s *Stack) {
+		s.Options.Instance = name
 	}))
 }
 
@@ -160,6 +173,8 @@ type Stack struct {
 		AddLogsToSpan bool
 
 		ServiceName string
+		Environment string
+		Instance    string
 		ScopeAttrs  []Attr
 	}
 }
@@ -175,7 +190,7 @@ type Span struct {
 	TraceID      TraceID
 
 	Name string
-	
+
 	File string
 	Line int
 
