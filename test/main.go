@@ -7,7 +7,7 @@ import (
 
 	"github.com/themakers/stack"
 	"github.com/themakers/stack/stack_backend"
-	"github.com/themakers/stack/stack_backend/stack_backend_otel_grpc"
+	"github.com/themakers/stack/stack_backend/stack_backend_otel_grpc_legacy"
 	"github.com/themakers/stack/stack_backend/stack_backend_text"
 	"github.com/themakers/stack/stack_stdlog"
 
@@ -21,7 +21,7 @@ func main() {
 	ctx = stack.With().Backend(stack_backend.TeeBackend(
 		stack_backend_text.New(),
 		//stack_backend_json.New(),
-		stack_backend_otel_grpc.New("localhost:32751"),
+		stack_backend_otel_grpc_legacy.New("localhost:32751"),
 	)).ServiceName("stack-demo").ScopeAttrs(stack.Attr("build", "0xdeadbeef")).Apply(ctx)
 
 	defer stack_backend.Shutdown(ctx)
