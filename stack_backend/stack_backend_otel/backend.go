@@ -68,7 +68,7 @@ func (b Backend) Handle(e stack_backend.Event) {
 					Resource: &resource_model_v1.Resource{
 						Attributes: attrsToKeyValue([]stack_backend.Attr{
 							{Name: "service.name", Value: e.State.Options.ServiceName},
-							{Name: "deployment.environment.name", Value: e.State.Options.Environment},
+							{Name: "deployment.environment", Value: e.State.Options.Environment},
 							{Name: "service.instance.id", Value: e.State.Options.Instance},
 						}),
 					},
@@ -120,7 +120,7 @@ func (b Backend) Handle(e stack_backend.Event) {
 					Resource: &resource_model_v1.Resource{
 						Attributes: attrsToKeyValue([]stack_backend.Attr{
 							{Name: "service.name", Value: e.State.Options.ServiceName},
-							{Name: "deployment.environment.name", Value: e.State.Options.Environment},
+							{Name: "deployment.environment", Value: e.State.Options.Environment},
 							{Name: "service.instance.id", Value: e.State.Options.Instance},
 						}),
 					},
