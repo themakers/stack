@@ -2,7 +2,6 @@ package stack
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"reflect"
 	"runtime/debug"
@@ -198,11 +197,8 @@ func Error(ctx context.Context, name string, err error, attrs ...A) error {
 }
 
 func Panic(p any) error {
-	return errors.New(fmt.Sprint(p))
+	panic(p)
 }
-
-// TODO
-// Panic()
 
 func TLog(ctx context.Context, typed any) {
 	var (
