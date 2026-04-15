@@ -196,7 +196,7 @@ func Error(ctx context.Context, name string, err error, attrs ...A) error {
 	return err
 }
 
-func Panic(p any) error {
+func Panic(p any) {
 	panic(p)
 }
 
