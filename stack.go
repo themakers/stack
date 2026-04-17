@@ -196,10 +196,6 @@ func Error(ctx context.Context, name string, err error, attrs ...A) error {
 	return err
 }
 
-func Panic(p any) {
-	panic(p)
-}
-
 func TLog(ctx context.Context, typed any) {
 	var (
 		val = reflect.ValueOf(typed)
