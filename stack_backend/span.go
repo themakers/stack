@@ -133,6 +133,12 @@ func (options Options) ApplyToStack(s *Stack) {
 	}
 }
 
+func (options Options) Cancel() Options {
+	return append(options, OptionFunc(func(s *Stack) {
+		s.CloseContextWithSpan = true
+	}))
+}
+
 //
 //  ▗▄▄▖ ▗▄▖ ▗▖  ▗▖▗▄▄▄▖▗▄▄▄▖▗▖  ▗▖▗▄▄▄▖
 // ▐▌   ▐▌ ▐▌▐▛▚▖▐▌  █  ▐▌    ▝▚▞▘   █
@@ -177,6 +183,8 @@ type Stack struct {
 		Instance    string
 		ScopeAttrs  []Attr
 	}
+
+	CloseContextWithSpan bool
 }
 
 func (s *Stack) Clone() *Stack {

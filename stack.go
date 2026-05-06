@@ -2,6 +2,7 @@ package stack
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"runtime/debug"
@@ -10,6 +11,7 @@ import (
 	"github.com/DataDog/gostackparse"
 
 	"github.com/themakers/stack/stack_backend"
+	"github.com/themakers/stack/stack_backend/stack_backend_text"
 )
 
 type A = stack_backend.Attr
@@ -52,6 +54,14 @@ func With() stack_backend.Options {
 	return stack_backend.Options{}
 }
 
+func Cancel() stack_backend.Options {
+	return With().Cancel()
+}
+
+func Default(ctx context.Context) context.Context {
+	return With().Backend(stack_backend_text.New()).Apply(ctx)
+}
+
 func WithVCSFields() stack_backend.Option {
 	info, ok := debug.ReadBuildInfo()
 	return stack_backend.OptionFunc(func(sb *stack_backend.Stack) {
@@ -83,7 +93,7 @@ func WithVCSFields() stack_backend.Option {
 // ▗▄▄▞▘▐▌   ▐▌ ▐▌▐▌  ▐▌
 //
 
-type endFunc func()
+type endFunc func(cause ...error)
 
 func Span(ctx context.Context, opts ...stack_backend.Option) (context.Context, endFunc) {
 	var s = stack_backend.Get(ctx).Clone()
@@ -104,6 +114,11 @@ func Span(ctx context.Context, opts ...stack_backend.Option) (context.Context, e
 	//> Apply options from arguments
 	stack_backend.Options(opts).ApplyToStack(s)
 
+	var cancel context.CancelCauseFunc
+	if s.CloseContextWithSpan {
+		ctx, cancel = context.WithCancelCause(ctx)
+	}
+
 	ctx = stack_backend.Put(ctx, s)
 
 	s.Backend.Handle(stack_backend.Event{
@@ -111,7 +126,14 @@ func Span(ctx context.Context, opts ...stack_backend.Option) (context.Context, e
 		State: s,
 	})
 
-	return ctx, func() {
+	return ctx, func(cause ...error) {
+		if cancel != nil {
+			if len(cause) > 0 {
+				cancel(cause[0])
+			} else {
+				cancel(nil)
+			}
+		}
 		s.Span.EndTime = time.Now()
 		s.Backend.Handle(stack_backend.Event{
 			Kind:  stack_backend.KindSpanEnd,
@@ -134,6 +156,10 @@ func log(ctx context.Context, level, name string, err error, st *gostackparse.Go
 		s             = stack_backend.Get(ctx)
 		_, file, line = stack_backend.Operation(1)
 	)
+
+	if level == stack_backend.LevelError && err == nil {
+		err = errors.New(name)
+	}
 
 	if s.Options.AddLogsToSpan {
 		l := stack_backend.SpanLog{
