@@ -2,6 +2,7 @@ package stack_backend_otel_grpc
 
 import (
 	"context"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -15,6 +16,11 @@ import (
 
 	"github.com/themakers/stack/stack_backend/stack_backend_otel"
 )
+
+// exportTimeout bounds the export duration: context.Background() with no
+// deadline used to be passed — with an unreachable collector, Export could
+// hang indefinitely, blocking the synchronous logging path.
+const exportTimeout = 5 * time.Second
 
 var _ stack_backend_otel.OTLPSink = (*Sink)(nil)
 
@@ -40,40 +46,31 @@ func New(target string) stack_backend_otel.OTLPSink {
 }
 
 func (s *Sink) ExportLogs(ctx context.Context, ld *logs_model_v1.LogsData) error {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(ctx, exportTimeout)
 	defer cancel()
 
-	if _, err := s.logs.Export(ctx, &logs_v1.ExportLogsServiceRequest{
+	_, err := s.logs.Export(ctx, &logs_v1.ExportLogsServiceRequest{
 		ResourceLogs: ld.ResourceLogs,
-	}); err != nil {
-		panic(err)
-	} else {
-		return nil
-	}
+	})
+	return err
 }
 
 func (s *Sink) ExportTraces(ctx context.Context, td *trace_model_v1.TracesData) error {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(ctx, exportTimeout)
 	defer cancel()
 
-	if _, err := s.traces.Export(ctx, &trace_v1.ExportTraceServiceRequest{
+	_, err := s.traces.Export(ctx, &trace_v1.ExportTraceServiceRequest{
 		ResourceSpans: td.ResourceSpans,
-	}); err != nil {
-		panic(err)
-	} else {
-		return nil
-	}
+	})
+	return err
 }
 
 func (s *Sink) ExportMetrics(ctx context.Context, md *metrics_model_v1.MetricsData) error {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(ctx, exportTimeout)
 	defer cancel()
 
-	if _, err := s.metrics.Export(ctx, &metrics_v1.ExportMetricsServiceRequest{
+	_, err := s.metrics.Export(ctx, &metrics_v1.ExportMetricsServiceRequest{
 		ResourceMetrics: md.ResourceMetrics,
-	}); err != nil {
-		panic(err)
-	} else {
-		return nil
-	}
+	})
+	return err
 }

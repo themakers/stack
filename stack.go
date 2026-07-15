@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime/debug"
+	"sync/atomic"
 	"time"
 
 	"github.com/DataDog/gostackparse"
@@ -99,10 +100,12 @@ func Span(ctx context.Context, opts ...stack_backend.Option) (context.Context, e
 	var s = stack_backend.Get(ctx).Clone()
 
 	s.Span.Time = time.Now()
-	s.Span.OwnLogs = []stack_backend.SpanLog{}
 
-	// Новый спан не наследует ошибку родителя: Clone() — поверхностная
-	// копия, а Span.Error/ErrorStackTrace принадлежат конкретному спану.
+	// A new span must not inherit parent state specific to a particular span:
+	// logs, the error, and its stack trace. Clone makes a shallow copy, and
+	// these fields belong to this span, not to the chain. OwnLogs = nil (not
+	// an empty slice) — the first append allocates lazily.
+	s.Span.OwnLogs = nil
 	s.Span.Error = nil
 	s.Span.ErrorStackTrace = nil
 
@@ -113,8 +116,11 @@ func Span(ctx context.Context, opts ...stack_backend.Option) (context.Context, e
 	s.Span.ParentSpanID = s.Span.ID
 	s.Span.ID = stack_backend.NewID()
 
+	// The function name is stored "raw" (without the "()" suffix): the string
+	// shares memory with pclntab, no copies or concatenations. Backends append
+	// the "()" suffix at render time (see stack_backend_text). This removes an
+	// allocation from every span.
 	s.Span.Name, s.Span.File, s.Span.Line = stack_backend.Operation(0)
-	s.Span.Name = fmt.Sprint(s.Span.Name, "()") // ???
 
 	//> Apply options from arguments
 	stack_backend.Options(opts).ApplyToStack(s)
@@ -131,18 +137,38 @@ func Span(ctx context.Context, opts ...stack_backend.Option) (context.Context, e
 		State: s,
 	})
 
+	var ended atomic.Bool
 	return ctx, func(cause ...error) {
+		// Idempotency: a repeated done() is a no-op, no second KindSpanEnd.
+		if !ended.CompareAndSwap(false, true) {
+			return
+		}
+
+		var cause0 error
+		if len(cause) > 0 {
+			cause0 = cause[0]
+		}
+
 		if cancel != nil {
-			if len(cause) > 0 {
-				cancel(cause[0])
-			} else {
-				cancel(nil)
-			}
+			cancel(cause0)
+		}
+
+		// Mutations go under the lock — a concurrent log() may be reading the
+		// Stack in Clone(). done(err) marks the span as failed unless an error
+		// has already been set (via stack.Error inside the span).
+		s.LockState()
+		if cause0 != nil && s.Span.Error == nil {
+			s.Span.Error = cause0
 		}
 		s.Span.EndTime = time.Now()
+		s.UnlockState()
+
+		// The backend gets a snapshot (Clone copies under the lock): if another
+		// goroutine keeps logging into this ctx during done(), the backend must
+		// not read OwnLogs/Error concurrently with their mutation.
 		s.Backend.Handle(stack_backend.Event{
 			Kind:  stack_backend.KindSpanEnd,
-			State: s,
+			State: s.Clone(),
 		})
 	}
 }
@@ -166,21 +192,26 @@ func log(ctx context.Context, level, name string, err error, st *gostackparse.Go
 		err = errors.New(name)
 	}
 
-	if s.Options.AddLogsToSpan {
-		l := stack_backend.SpanLog{
-			Time:  t,
-			Name:  name,
-			Attrs: append(attrs, Attr("level", level)),
+	// Serialize mutations of the shared *Stack (OwnLogs, Error): the same ctx
+	// may be used from multiple goroutines. Level/Error are stored as SpanLog
+	// fields rather than appended to attrs — this removes the variadic attrs
+	// slice reallocation on every log.
+	if s.Options.AddLogsToSpan || (err != nil) {
+		s.LockState()
+		if s.Options.AddLogsToSpan {
+			s.Span.OwnLogs = append(s.Span.OwnLogs, stack_backend.SpanLog{
+				Time:  t,
+				Name:  name,
+				Level: level,
+				Error: err,
+				Attrs: attrs,
+			})
 		}
-		if err != nil {
-			l.Attrs = append(l.Attrs, Attr("error", err))
+		if err != nil && s.Span.Error == nil {
+			s.Span.Error = err
+			s.Span.ErrorStackTrace = st
 		}
-		s.Span.OwnLogs = append(s.Span.OwnLogs, l)
-	}
-
-	if err != nil && s.Span.Error == nil {
-		s.Span.Error = err
-		s.Span.ErrorStackTrace = st
+		s.UnlockState()
 	}
 
 	var e = stack_backend.Event{
@@ -228,19 +259,27 @@ func Error(ctx context.Context, name string, err error, attrs ...A) error {
 }
 
 func TLog(ctx context.Context, typed any) {
-	var (
-		val = reflect.ValueOf(typed)
-		typ = val.Type()
-	)
+	// The logger must not panic: report invalid input with a Warn log and return.
+	val := reflect.ValueOf(typed)
+	if !val.IsValid() {
+		Warn(ctx, "stack.TLog: input must be a struct or pointer to a struct", F("type", "nil"))
+		return
+	}
+
+	typ := val.Type()
 
 	for typ.Kind() == reflect.Ptr {
+		if val.IsNil() {
+			Warn(ctx, "stack.TLog: input must be a struct or pointer to a struct", F("type", typ.String()))
+			return
+		}
 		val = val.Elem()
 		typ = val.Type()
 	}
 
 	if typ.Kind() != reflect.Struct {
-		// FIXME: Log instead of panic
-		panic("input must be a struct or pointer to a struct")
+		Warn(ctx, "stack.TLog: input must be a struct or pointer to a struct", F("type", typ.String()))
+		return
 	}
 
 	fullName := fmt.Sprintf("%s.%s", typ.PkgPath(), typ.Name())

@@ -2,6 +2,10 @@ package stack_backend_otel
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"sync/atomic"
+	"time"
 
 	common_model_v1 "go.opentelemetry.io/proto/otlp/common/v1"
 	logs_model_v1 "go.opentelemetry.io/proto/otlp/logs/v1"
@@ -13,6 +17,26 @@ import (
 )
 
 var _ stack_backend.Backend = Backend{}
+
+// exportErrLogInterval is the minimum interval between export error messages
+// in stderr. Errors neither panic nor stay silent: an unreachable collector is
+// visible in stderr without spamming it on every event.
+const exportErrLogInterval = 10 * time.Second
+
+var lastExportErrLog atomic.Int64
+
+func reportExportError(kind string, err error) {
+	if err == nil {
+		return
+	}
+	now := time.Now().Unix()
+	last := lastExportErrLog.Load()
+	if now-last >= int64(exportErrLogInterval/time.Second) &&
+		lastExportErrLog.CompareAndSwap(last, now) {
+		fmt.Fprintf(os.Stderr, "stack: otel %s export error (further errors suppressed for %s): %v\n",
+			kind, exportErrLogInterval, err)
+	}
+}
 
 type OTLPSink interface {
 	ExportLogs(ctx context.Context, ld *logs_model_v1.LogsData) error
@@ -32,8 +56,7 @@ func New(sink OTLPSink) stack_backend.Backend {
 }
 
 func (b Backend) Handle(e stack_backend.Event) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := context.Background()
 
 	if e.Kind&stack_backend.KindSpanEnd != 0 {
 
@@ -48,9 +71,19 @@ func (b Backend) Handle(e stack_backend.Event) {
 		}
 
 		for _, l := range e.State.Span.OwnLogs {
+			// Level/Error are stored as SpanLog fields (not in Attrs) — add
+			// them as event attributes, otherwise the level and error of
+			// nested logs would be lost in OTLP.
+			attrs := l.Attrs
+			if l.Level != "" {
+				attrs = append(attrs[:len(attrs):len(attrs)], stack_backend.Attr{Name: "level", Value: l.Level})
+			}
+			if l.Error != nil {
+				attrs = append(attrs[:len(attrs):len(attrs)], stack_backend.Attr{Name: "error", Value: l.Error.Error()})
+			}
 			span.Events = append(span.Events, &trace_model_v1.Span_Event{
 				Name:         l.Name,
-				Attributes:   attrsToKeyValue(l.Attrs),
+				Attributes:   attrsToKeyValue(attrs),
 				TimeUnixNano: uint64(l.Time.UnixNano()),
 			})
 		}
@@ -62,26 +95,13 @@ func (b Backend) Handle(e stack_backend.Event) {
 			}
 		}
 
-		if err := b.sink.ExportTraces(ctx, &trace_model_v1.TracesData{
+		// The logger must not panic when the collector is unreachable.
+		reportExportError("traces", b.sink.ExportTraces(ctx, &trace_model_v1.TracesData{
 			ResourceSpans: []*trace_model_v1.ResourceSpans{
 				{
-					Resource: &resource_model_v1.Resource{
-						Attributes: attrsToKeyValue([]stack_backend.Attr{
-							{Name: "service.name", Value: e.State.Options.ServiceName},
-							{Name: "deployment.environment", Value: e.State.Options.Environment},
-							{Name: "service.instance.id", Value: e.State.Options.Instance},
-						}),
-					},
+					Resource: b.resource(e),
 					ScopeSpans: []*trace_model_v1.ScopeSpans{
 						{
-							// TODO
-							//Scope: &common_model_v1.InstrumentationScope{
-							//	Name:    "iscope-name-2",
-							//	Version: "v0.0.1",
-							//	Attributes: attrsToKeyValue([]stack_backend.Attr{
-							//		{Name: "iscope-attr-1", Value: "adsfgsdfgsd"},
-							//	}),
-							//},
 							Spans: []*trace_model_v1.Span{
 								span,
 							},
@@ -89,9 +109,7 @@ func (b Backend) Handle(e stack_backend.Event) {
 					},
 				},
 			},
-		}); err != nil {
-			panic(err)
-		}
+		}))
 
 	} else if e.Kind&stack_backend.KindLog != 0 {
 
@@ -101,10 +119,17 @@ func (b Backend) Handle(e stack_backend.Event) {
 					StringValue: e.LogEvent.Name,
 				},
 			},
-			SeverityNumber: logs_model_v1.SeverityNumber_SEVERITY_NUMBER_INFO,
-			SeverityText:   stack_backend.LevelInfo,
+			SeverityNumber: severityNumber(e.LogEvent.Level),
+			SeverityText:   e.LogEvent.Level,
 			Attributes:     attrsToKeyValue(e.LogEvent.OwnAttrs),
 			TimeUnixNano:   uint64(e.LogEvent.Time.UnixNano()),
+		}
+
+		// The log's error is exported as a separate attribute (it used to be lost entirely).
+		if e.LogEvent.Error != nil {
+			log.Attributes = append(log.Attributes, attrsToKeyValue([]stack_backend.Attr{
+				{Name: "error", Value: e.LogEvent.Error.Error()},
+			})...)
 		}
 
 		if !e.State.Span.ID.IsZero() {
@@ -114,16 +139,10 @@ func (b Backend) Handle(e stack_backend.Event) {
 			log.Attributes = append(log.Attributes, attrsToKeyValue(e.State.Span.Attrs)...)
 		}
 
-		if err := b.sink.ExportLogs(ctx, &logs_model_v1.LogsData{
+		reportExportError("logs", b.sink.ExportLogs(ctx, &logs_model_v1.LogsData{
 			ResourceLogs: []*logs_model_v1.ResourceLogs{
 				{
-					Resource: &resource_model_v1.Resource{
-						Attributes: attrsToKeyValue([]stack_backend.Attr{
-							{Name: "service.name", Value: e.State.Options.ServiceName},
-							{Name: "deployment.environment", Value: e.State.Options.Environment},
-							{Name: "service.instance.id", Value: e.State.Options.Instance},
-						}),
-					},
+					Resource: b.resource(e),
 					ScopeLogs: []*logs_model_v1.ScopeLogs{
 						{
 							LogRecords: []*logs_model_v1.LogRecord{
@@ -133,12 +152,42 @@ func (b Backend) Handle(e stack_backend.Event) {
 					},
 				},
 			},
-		}); err != nil {
-			panic(err)
-		}
+		}))
 
 	}
 
+}
+
+// resource builds the OTLP Resource from scope options. Includes the base
+// service.* attributes and arbitrary ScopeAttrs (the latter used to not be
+// exported at all).
+func (b Backend) resource(e stack_backend.Event) *resource_model_v1.Resource {
+	attrs := []stack_backend.Attr{
+		{Name: "service.name", Value: e.State.Options.ServiceName},
+		{Name: "deployment.environment", Value: e.State.Options.Environment},
+		{Name: "service.instance.id", Value: e.State.Options.Instance},
+	}
+	attrs = append(attrs, e.State.Options.ScopeAttrs...)
+	return &resource_model_v1.Resource{
+		Attributes: attrsToKeyValue(attrs),
+	}
+}
+
+// severityNumber maps the textual log level to the OTLP SeverityNumber
+// (it used to be hardcoded to INFO).
+func severityNumber(level string) logs_model_v1.SeverityNumber {
+	switch level {
+	case stack_backend.LevelDebug:
+		return logs_model_v1.SeverityNumber_SEVERITY_NUMBER_DEBUG
+	case stack_backend.LevelInfo:
+		return logs_model_v1.SeverityNumber_SEVERITY_NUMBER_INFO
+	case stack_backend.LevelWarn:
+		return logs_model_v1.SeverityNumber_SEVERITY_NUMBER_WARN
+	case stack_backend.LevelError:
+		return logs_model_v1.SeverityNumber_SEVERITY_NUMBER_ERROR
+	default:
+		return logs_model_v1.SeverityNumber_SEVERITY_NUMBER_INFO
+	}
 }
 
 func (b Backend) Shutdown(ctx context.Context) {

@@ -2,56 +2,32 @@ package stack_http
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/themakers/stack/stack_backend"
 )
 
+// Errors are kept for compatibility; they delegate to the canonical values in
+// stack_backend.
 var (
-	ErrNoTraceContext         = errors.New("no trace context")
-	ErrsMalformedTraceContext = errors.New("malformed trace context")
+	ErrNoTraceContext         = stack_backend.ErrNoTraceContext
+	ErrsMalformedTraceContext = stack_backend.ErrMalformedTraceContext
 )
 
-const (
-	traceParentHeader = "traceparent"
-	traceStateHeader  = "tracestate"
-)
-
-// Import loads W3C Trace Context form supplied request header
+// Import loads the W3C Trace Context from request headers.
 func Import(from http.Header) (o stack_backend.Option, err error) {
-	return ImportFromString(from.Get(traceParentHeader), from.Get(traceStateHeader))
+	return ImportFromString(from.Get(stack_backend.TraceParentHeaderName()), from.Get(stack_backend.TraceStateHeaderName()))
 }
 
+// ImportFromString parses traceparent/tracestate into an option. Parsing is
+// the single implementation in stack_backend (it used to be duplicated here).
 func ImportFromString(traceparent, tracestate string) (o stack_backend.Option, err error) {
-	if len(traceparent) == 0 {
-		return nil, ErrNoTraceContext
-	}
-
-	var traceparentSpl = strings.Split(traceparent, "-")
-	if len(traceparentSpl) != 4 {
-		return nil, ErrsMalformedTraceContext
-	}
-
-	if traceparentSpl[0] != "00" {
-		return nil, ErrsMalformedTraceContext
-	}
-
-	traceID, err := stack_backend.TraceIDFromString(traceparentSpl[1])
+	traceID, parentID, err := stack_backend.ParseW3CTraceParent(traceparent)
 	if err != nil {
-		return nil, ErrsMalformedTraceContext
+		return nil, err
 	}
 
-	parentID, err := stack_backend.IDFromString(traceparentSpl[2])
-	if err != nil {
-		return nil, ErrsMalformedTraceContext
-	}
-
-	// TODO: Flags
-
-	// TODO: TraceState
+	// TODO: Flags, TraceState
 
 	return stack_backend.OptionFunc(func(s *stack_backend.Stack) {
 		s.Span.TraceID = traceID
@@ -62,16 +38,17 @@ func ImportFromString(traceparent, tracestate string) (o stack_backend.Option, e
 func Export(from context.Context, to http.Header) {
 	var traceparent, tracestate = ExportToString(from)
 	if traceparent != "" {
-		to.Set(traceParentHeader, traceparent)
+		to.Set(stack_backend.TraceParentHeaderName(), traceparent)
 	}
 
 	if tracestate != "" {
-		to.Set(traceStateHeader, tracestate)
+		to.Set(stack_backend.TraceStateHeaderName(), tracestate)
 	}
 }
 
+// ExportToString builds traceparent from the current span. Returns an empty
+// string for zero IDs (we never emit the invalid "00-000…-000…-01").
 func ExportToString(from context.Context) (traceparent, tracestate string) {
 	var s = stack_backend.Get(from)
-	return fmt.Sprintf("00-%s-%s-01", s.Span.TraceID.String(), s.Span.ID.String()),
-		fmt.Sprintf("")
+	return stack_backend.FormatW3CTraceParent(s.Span.TraceID, s.Span.ID), ""
 }

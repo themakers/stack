@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/DataDog/gostackparse"
 	"github.com/fatih/color"
@@ -21,162 +22,341 @@ const timeFormat = "2006-01-02 15:04:05.000000000"
 
 var _ stack_backend.Backend = Backend{}
 
-type Backend struct{}
-
-func New() stack_backend.Backend {
-	return Backend{}
+type Backend struct {
+	w io.Writer
 }
 
-//	type logColors struct {
-//		LevelColor      *color.Color
-//		NameColor       *color.Color
-//		NestedAttrColor *color.Color
-//		OwnAttrColor    *color.Color
-//	}
+func New() stack_backend.Backend {
+	return Backend{w: os.Stdout}
+}
+
+// NewWithWriter creates a text backend writing to an arbitrary io.Writer.
+// Needed for tests and benchmarks (writing to io.Discard) and for redirecting
+// output to a file/buffer.
+func NewWithWriter(w io.Writer) stack_backend.Backend {
+	return Backend{w: w}
+}
+
+// writer returns the target io.Writer, substituting os.Stdout for the zero
+// value (backward compatibility with a Backend{} created without the
+// constructor).
+func (b Backend) writer() io.Writer {
+	if b.w != nil {
+		return b.w
+	}
+	return os.Stdout
+}
+
+// Prebuilt colors: color.New used to be called 6-8 times per event, costing
+// as many allocations. color.Color objects are immutable, so they can live as
+// package variables and be reused.
+var (
+	colTime       = color.New()
+	colFileLine   = color.New()
+	colNested     = color.New().AddRGB(128, 128, 128)
+	colOwnAttrs   = color.New(color.FgHiWhite)
+	colName       = color.New(color.FgMagenta)
+	colError      = color.New(color.FgRed, color.BgWhite)
+	colLvlSpan    = color.New(color.FgWhite)
+	colLvlSpanEnd = color.New(color.FgHiWhite)
+	colLvlDebug   = color.New(color.FgBlack, color.BgHiWhite)
+	colLvlInfo    = color.New(color.FgBlack, color.BgWhite)
+	colLvlWarn    = color.New(color.FgBlack, color.BgYellow)
+	colLvlError   = color.New(color.FgBlack, color.BgRed)
+	colLvlDefault = color.New(color.FgBlue, color.BgWhite)
+)
+
+// Precomputed color escape sequences (prefix + suffix). We write them into
+// the buffer directly instead of color.Sprint* — the latter allocates an
+// intermediate string per field. With colors disabled (color.NoColor),
+// prefix/suffix are empty and the output is clean.
+type colorCode struct {
+	prefix []byte
+	suffix []byte
+}
+
+func makeColorCode(c *color.Color) colorCode {
+	s := c.Sprint("\x00")
+	before, after, found := strings.Cut(s, "\x00")
+	if !found {
+		return colorCode{}
+	}
+	return colorCode{prefix: []byte(before), suffix: []byte(after)}
+}
+
+var (
+	ccTime       = makeColorCode(colTime)
+	ccFileLine   = makeColorCode(colFileLine)
+	ccNested     = makeColorCode(colNested)
+	ccOwnAttrs   = makeColorCode(colOwnAttrs)
+	ccName       = makeColorCode(colName)
+	ccError      = makeColorCode(colError)
+	ccLvlSpan    = makeColorCode(colLvlSpan)
+	ccLvlSpanEnd = makeColorCode(colLvlSpanEnd)
+	ccLvlDebug   = makeColorCode(colLvlDebug)
+	ccLvlInfo    = makeColorCode(colLvlInfo)
+	ccLvlWarn    = makeColorCode(colLvlWarn)
+	ccLvlError   = makeColorCode(colLvlError)
+	ccLvlDefault = makeColorCode(colLvlDefault)
+)
+
+// Buffer pool: removes the bytes.Buffer allocation per event; the buffer
+// warms up to a stable size.
+var bufPool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
+}
+
+// record is a snapshot of fields for rendering. Lives on Handle's stack, does
+// not escape to the heap.
 type record struct {
-	Time      time.Time
-	TimeColor *color.Color
+	Time     time.Time
+	Level    string
+	LevelCC  colorCode
+	File     string
+	Line     int
+	Name     string
+	NameSfx  bool // append "()" to the name (spans store the name without the suffix)
+	Error    string
+	Duration time.Duration
 
-	Level      string
-	LevelColor *color.Color
-
-	File          string
-	Line          int
-	FileLineColor *color.Color
-
-	Name      string
-	NameColor *color.Color
-
-	Error      string
-	ErrorColor *color.Color
-
-	Duration      time.Duration
-	DurationColor *color.Color
-
-	OwnAttrs      []stack_backend.Attr
-	OwnAttrsColor *color.Color
-
-	NestedAttrs      []stack_backend.Attr
-	NestedAttrsColor *color.Color
+	OwnAttrs    []stack_backend.Attr
+	NestedAttrs []stack_backend.Attr
 
 	StackTrace *gostackparse.Goroutine
 }
 
-func (b Backend) write(w io.Writer, isTTY bool, r record) error {
-	buf := bytes.NewBuffer([]byte{})
+func (b Backend) write(w io.Writer, r record) error {
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufPool.Put(buf)
 
-	buf.WriteString(r.TimeColor.Sprint(r.Time.Format(timeFormat)))
-	buf.WriteString(" ")
-	buf.WriteString(r.LevelColor.Sprintf(" %-5s ", r.Level))
+	// time
+	buf.Write(ccTime.prefix)
+	buf.Write(r.Time.AppendFormat(buf.AvailableBuffer(), timeFormat))
+	buf.Write(ccTime.suffix)
+
+	// level
+	buf.WriteByte(' ')
+	buf.Write(r.LevelCC.prefix)
+	buf.WriteByte(' ')
+	writePadded(buf, r.Level, 5)
+	buf.WriteByte(' ')
+	buf.Write(r.LevelCC.suffix)
+
+	// file:line
 	if len(r.File) > 0 {
-		buf.WriteString(" ")
-		buf.WriteString(r.FileLineColor.Sprintf("%s:%d", filepath.Base(r.File), r.Line))
+		buf.WriteByte(' ')
+		buf.WriteByte(' ')
+		buf.Write(ccFileLine.prefix)
+		buf.WriteString(filepath.Base(r.File))
+		buf.WriteByte(':')
+		buf.Write(strconv.AppendInt(buf.AvailableBuffer(), int64(r.Line), 10))
+		buf.Write(ccFileLine.suffix)
 	}
-	buf.WriteString(" ")
-	buf.WriteString(r.NameColor.Sprint(r.Name))
 
+	// name
+	buf.WriteByte(' ')
+	buf.Write(ccName.prefix)
+	buf.WriteString(r.Name)
+	if r.NameSfx {
+		buf.WriteString("()")
+	}
+	buf.Write(ccName.suffix)
+
+	// duration
 	if r.Duration != 0 {
-		buf.WriteString(" ")
-		buf.WriteString(r.OwnAttrsColor.Sprint(r.Duration))
+		buf.WriteByte(' ')
+		buf.Write(ccOwnAttrs.prefix)
+		buf.WriteString(r.Duration.String())
+		buf.Write(ccOwnAttrs.suffix)
 	}
 
+	// error
 	if r.Error != "" {
-		buf.WriteString(" ")
-		buf.WriteString(r.ErrorColor.Sprint(r.Error))
+		buf.WriteByte(' ')
+		buf.Write(ccError.prefix)
+		buf.WriteString(r.Error)
+		buf.Write(ccError.suffix)
 	}
 
-	//buf.WriteString(" {")
-	for i, f := range r.OwnAttrs {
-		buf.WriteString(" ")
-		var v any
-		switch f.Value.(type) {
-		case stack_backend.RawAttrValue:
-			v = f.Value
-		default:
-			v = jsonVal(f.Value)
-		}
-		buf.WriteString(r.OwnAttrsColor.Sprintf(`%s=%s`, f.Name, v))
-		if i < len(r.OwnAttrs)-1 {
-			buf.WriteString(",")
-		}
-	}
+	// own attrs
+	writeAttrs(buf, r.OwnAttrs, ccOwnAttrs)
 
 	if len(r.OwnAttrs) > 0 && len(r.NestedAttrs) > 0 {
-		buf.WriteString(r.NestedAttrsColor.Sprint(","))
+		buf.Write(ccNested.prefix)
+		buf.WriteByte(',')
+		buf.Write(ccNested.suffix)
 	}
 
-	for i, f := range r.NestedAttrs {
-		buf.WriteString(" ")
-		var v any
-		switch f.Value.(type) {
-		case stack_backend.RawAttrValue:
-			v = f.Value
-		default:
-			v = jsonVal(f.Value)
-		}
-		buf.WriteString(r.NestedAttrsColor.Sprintf(`%s=%s`, f.Name, v))
-		if i < len(r.NestedAttrs)-1 {
-			buf.WriteString(",")
-		}
-	}
+	// nested attrs
+	writeAttrs(buf, r.NestedAttrs, ccNested)
 
-	//buf.WriteString(" }\n")
-	buf.WriteString("\n")
+	buf.WriteByte('\n')
 
 	if r.StackTrace != nil {
-		for _, frm := range r.StackTrace.Stack {
-			buf.WriteString("     ••• ")
-			buf.WriteString(frm.Func)
-			buf.WriteString("\n")
-			buf.WriteString("                 ")
+		writeStackTrace(buf, r.StackTrace)
+	}
 
-			seg := strings.Split(frm.File, string(rune(filepath.Separator)))
-			if len(seg) >= 5 {
-				seg = seg[len(seg)-5:]
-			}
+	// The single write point. A write error must not panic (EPIPE on a closed
+	// stdout must not crash the service) — silently ignored at the Handle level.
+	_, err := buf.WriteTo(w)
+	return err
+}
 
-			buf.WriteString(filepath.Join(seg...))
-			buf.WriteString(":")
-			buf.WriteString(strconv.Itoa(frm.Line))
-			buf.WriteString(" ••• ")
-			buf.WriteString("\n")
+func writeAttrs(buf *bytes.Buffer, attrs []stack_backend.Attr, cc colorCode) {
+	for i, f := range attrs {
+		buf.WriteByte(' ')
+		buf.Write(cc.prefix)
+		buf.WriteString(f.Name)
+		buf.WriteByte('=')
+		appendValue(buf, f.Value)
+		buf.Write(cc.suffix)
+		if i < len(attrs)-1 {
+			buf.WriteByte(',')
 		}
 	}
+}
 
-	if _, err := buf.WriteTo(w); err != nil {
-		return err
-	} else {
-		return nil
+func writeStackTrace(buf *bytes.Buffer, st *gostackparse.Goroutine) {
+	for _, frm := range st.Stack {
+		if frm == nil {
+			continue
+		}
+		buf.WriteString("     ••• ")
+		buf.WriteString(frm.Func)
+		buf.WriteString("\n                 ")
+
+		seg := strings.Split(frm.File, string(rune(filepath.Separator)))
+		if len(seg) >= 5 {
+			seg = seg[len(seg)-5:]
+		}
+		buf.WriteString(filepath.Join(seg...))
+		buf.WriteByte(':')
+		buf.Write(strconv.AppendInt(buf.AvailableBuffer(), int64(frm.Line), 10))
+		buf.WriteString(" ••• \n")
 	}
+}
+
+// writePadded writes s right-padded with spaces to width (equivalent of %-5s).
+func writePadded(buf *bytes.Buffer, s string, width int) {
+	buf.WriteString(s)
+	for i := len(s); i < width; i++ {
+		buf.WriteByte(' ')
+	}
+}
+
+// appendValue writes an attribute value into the buffer without intermediate
+// strings for common types. Reflective json.Marshal is reserved for rare
+// complex values (map/struct/slice). RawAttrValue is printed as-is.
+func appendValue(buf *bytes.Buffer, v any) {
+	switch val := v.(type) {
+	case stack_backend.RawAttrValue:
+		buf.WriteString(string(val))
+	case string:
+		appendJSONString(buf, val)
+	case []byte:
+		appendJSONString(buf, string(val))
+	case bool:
+		buf.Write(strconv.AppendBool(buf.AvailableBuffer(), val))
+	case int:
+		buf.Write(strconv.AppendInt(buf.AvailableBuffer(), int64(val), 10))
+	case int8:
+		buf.Write(strconv.AppendInt(buf.AvailableBuffer(), int64(val), 10))
+	case int16:
+		buf.Write(strconv.AppendInt(buf.AvailableBuffer(), int64(val), 10))
+	case int32:
+		buf.Write(strconv.AppendInt(buf.AvailableBuffer(), int64(val), 10))
+	case int64:
+		buf.Write(strconv.AppendInt(buf.AvailableBuffer(), val, 10))
+	case uint:
+		buf.Write(strconv.AppendUint(buf.AvailableBuffer(), uint64(val), 10))
+	case uint8:
+		buf.Write(strconv.AppendUint(buf.AvailableBuffer(), uint64(val), 10))
+	case uint16:
+		buf.Write(strconv.AppendUint(buf.AvailableBuffer(), uint64(val), 10))
+	case uint32:
+		buf.Write(strconv.AppendUint(buf.AvailableBuffer(), uint64(val), 10))
+	case uint64:
+		buf.Write(strconv.AppendUint(buf.AvailableBuffer(), val, 10))
+	case float32:
+		buf.Write(strconv.AppendFloat(buf.AvailableBuffer(), float64(val), 'g', -1, 32))
+	case float64:
+		buf.Write(strconv.AppendFloat(buf.AvailableBuffer(), val, 'g', -1, 64))
+	case time.Duration:
+		buf.WriteString(val.String())
+	case time.Time:
+		buf.Write(val.AppendFormat(buf.AvailableBuffer(), time.RFC3339Nano))
+	case error:
+		appendJSONString(buf, val.Error())
+	case nil:
+		buf.WriteString("null")
+	default:
+		// Cold path: a complex value. json.Marshal without Indent, written
+		// directly into the buffer. A marshal error does not panic — placeholder.
+		if data, err := json.Marshal(v); err != nil {
+			buf.WriteString("<attr marshal error>")
+		} else {
+			buf.Write(data)
+		}
+	}
+}
+
+// appendJSONString writes a string in JSON quotes. The fast path without
+// json.Marshal is for strings with no characters requiring escapes; valid
+// UTF-8 (including Cyrillic) is written raw: JSON strings are UTF-8, escaping
+// is only mandatory for control characters, the quote, and the backslash.
+func appendJSONString(buf *bytes.Buffer, s string) {
+	if !needsJSONEscape(s) {
+		buf.WriteByte('"')
+		buf.WriteString(s)
+		buf.WriteByte('"')
+		return
+	}
+	if data, err := json.Marshal(s); err != nil {
+		buf.WriteString("<attr marshal error>")
+	} else {
+		buf.Write(data)
+	}
+}
+
+func needsJSONEscape(s string) bool {
+	hasHigh := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 0x20 || c == '"' || c == '\\' {
+			return true
+		}
+		if c >= 0x80 {
+			hasHigh = true
+		}
+	}
+	// Non-ASCII without special characters: only valid UTF-8 may go raw —
+	// broken bytes are passed to json.Marshal (it replaces them with U+FFFD).
+	return hasHigh && !utf8.ValidString(s)
 }
 
 func (b Backend) Handle(e stack_backend.Event) {
 	var r record
 
-	r.TimeColor = color.New()
-	r.FileLineColor = color.New()
-	r.NestedAttrsColor = color.New().AddRGB(128, 128, 128)
-	r.OwnAttrsColor = color.New(color.FgHiWhite)
-	r.NameColor = color.New(color.FgMagenta)
-	r.ErrorColor = color.New(color.FgRed, color.BgWhite)
-
 	if e.Kind&stack_backend.KindSpan != 0 {
 		r.Name = e.State.Span.Name
+		r.NameSfx = true
 		r.Level = stack_backend.LevelSpan
-		r.LevelColor = color.New(color.FgWhite)
+		r.LevelCC = ccLvlSpan
 		r.File = e.State.Span.File
 		r.Line = e.State.Span.Line
 		r.Time = e.State.Span.Time
 		r.OwnAttrs = e.State.Span.Attrs
 	} else if e.Kind&stack_backend.KindSpanEnd != 0 {
 		r.Name = e.State.Span.Name
+		r.NameSfx = true
 		r.Level = stack_backend.LevelSpanEnd
-		r.LevelColor = color.New(color.FgHiWhite)
+		r.LevelCC = ccLvlSpanEnd
 		r.Time = e.State.Span.EndTime
 		r.Duration = e.State.Span.EndTime.Sub(e.State.Span.Time)
 		r.OwnAttrs = e.State.Span.Attrs
 		if e.State.Span.Error != nil {
-			r.Error = fmt.Sprint(e.State.Span.Error)
+			r.Error = e.State.Span.Error.Error()
 		}
 	} else if e.Kind&stack_backend.KindLog != 0 {
 		r.NestedAttrs = e.State.Span.Attrs
@@ -187,33 +367,30 @@ func (b Backend) Handle(e stack_backend.Event) {
 		r.File = e.LogEvent.File
 		r.Line = e.LogEvent.Line
 		if e.LogEvent.Error != nil {
-			r.Error = fmt.Sprint(e.LogEvent.Error)
+			r.Error = e.LogEvent.Error.Error()
 			r.StackTrace = e.LogEvent.StackTrace
 		}
-		switch e.LogEvent.Level {
-		case stack_backend.LevelDebug:
-			r.LevelColor = color.New(color.FgBlack, color.BgHiWhite)
-		case stack_backend.LevelInfo:
-			r.LevelColor = color.New(color.FgBlack, color.BgWhite)
-		case stack_backend.LevelWarn:
-			r.LevelColor = color.New(color.FgBlack, color.BgYellow)
-		case stack_backend.LevelError:
-			r.LevelColor = color.New(color.FgBlack, color.BgRed)
-		default:
-			r.LevelColor = color.New(color.FgBlue, color.BgWhite)
-		}
+		r.LevelCC = levelColor(e.LogEvent.Level)
+	} else {
+		return
 	}
 
-	if err := b.write(os.Stdout, true, r); err != nil {
-		panic(err)
-	}
+	// A write error must not panic — a logger must not crash the service.
+	_ = b.write(b.writer(), r)
 }
 
-func jsonVal(v any) string {
-	if data, err := json.MarshalIndent(v, "", "  "); err != nil {
-		panic(err)
-	} else {
-		return string(data)
+func levelColor(level string) colorCode {
+	switch level {
+	case stack_backend.LevelDebug:
+		return ccLvlDebug
+	case stack_backend.LevelInfo:
+		return ccLvlInfo
+	case stack_backend.LevelWarn:
+		return ccLvlWarn
+	case stack_backend.LevelError:
+		return ccLvlError
+	default:
+		return ccLvlDefault
 	}
 }
 

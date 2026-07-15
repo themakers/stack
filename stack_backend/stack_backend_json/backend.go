@@ -17,11 +17,13 @@ func New() stack_backend.Backend {
 }
 
 func (b Backend) Handle(e stack_backend.Event) {
-	if data, err := json.MarshalIndent(e, "", "  "); err != nil {
-		panic(err)
-	} else if _, err := os.Stdout.Write(data); err != nil {
-		panic(err)
+	// The logger must not panic: a marshal error becomes a placeholder, a
+	// stdout write error is ignored (EPIPE must not crash the service).
+	data, err := json.MarshalIndent(e, "", "  ")
+	if err != nil {
+		data = []byte(`{"error":"stack_backend_json: marshal failed"}`)
 	}
+	_, _ = os.Stdout.Write(data)
 }
 
 func (b Backend) Shutdown(ctx context.Context) {

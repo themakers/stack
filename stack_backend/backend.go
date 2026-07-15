@@ -11,6 +11,13 @@ import "context"
 // ▐▙▄▞▘▐▌ ▐▌▝▚▄▄▖▐▌ ▐▌▐▙▄▄▖▐▌  ▐▌▐▙▄▄▀
 //
 
+// Backend receives telemetry events.
+//
+// Handle contract: the call is synchronous and runs on the event source's
+// goroutine. An implementation must NOT retain e.State after Handle returns —
+// it is a live snapshot that may be reused/mutated. If a backend needs to keep
+// the data (batching, asynchronous export), it must copy the required fields
+// itself. Handle must not panic: a logger has no right to crash the service.
 type Backend interface {
 	Handle(e Event)
 	Shutdown(ctx context.Context)
@@ -54,8 +61,14 @@ func MuxBackend(rules ...MuxBackendRule) Backend {
 				rule.TryHandle(e)
 			}
 		},
+		// Shutdown is propagated to all nested backends: otherwise exporters
+		// (OTel etc.) never flush their buffers on process shutdown.
 		ShutdownFn: func(ctx context.Context) {
-
+			for _, rule := range rules {
+				if rule.Backend != nil {
+					rule.Backend.Shutdown(ctx)
+				}
+			}
 		},
 	}
 }
@@ -92,6 +105,11 @@ func EventFilter(backend Backend, filterFn func(e *Event) bool) Backend {
 		HandleFn: func(e Event) {
 			if filterFn(&e) {
 				backend.Handle(e)
+			}
+		},
+		ShutdownFn: func(ctx context.Context) {
+			if backend != nil {
+				backend.Shutdown(ctx)
 			}
 		},
 	}
