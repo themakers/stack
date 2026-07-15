@@ -3,10 +3,12 @@ package stack_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/themakers/stack"
 	"github.com/themakers/stack/stack_backend"
@@ -93,7 +95,7 @@ func TestSiblingSpansDoNotShareAttrs(t *testing.T) {
 	for _, e := range ends {
 		for _, a := range e.State.Span.Attrs {
 			if a.Name == "k" {
-				vals = append(vals, a.Value.(string))
+				vals = append(vals, a.Value.String())
 			}
 		}
 	}
@@ -108,7 +110,7 @@ func TestSiblingSpansDoNotShareAttrs(t *testing.T) {
 		var ks []string
 		for _, a := range e.State.Span.Attrs {
 			if a.Name == "k" {
-				ks = append(ks, a.Value.(string))
+				ks = append(ks, a.Value.String())
 			}
 		}
 		// The base span has a single k=base; children have base + childN.
@@ -354,5 +356,106 @@ func TestIDGeneration(t *testing.T) {
 			t.Fatalf("duplicate trace id at iter %d", i)
 		}
 		seen[id.String()] = true
+	}
+}
+
+// Value union: round-trip of all kinds through F and getters.
+func TestValueKindsRoundTrip(t *testing.T) {
+	now := time.Now()
+	err := errors.New("kaboom")
+
+	cases := []struct {
+		attr     stack.A
+		kind     stack_backend.ValueKind
+		checkVal func(v stack_backend.Value) bool
+	}{
+		{stack.F("s", "hello"), stack_backend.ValueKindString, func(v stack_backend.Value) bool { return v.String() == "hello" }},
+		{stack.F("i", 42), stack_backend.ValueKindInt64, func(v stack_backend.Value) bool { return v.Int64() == 42 }},
+		{stack.F("i64", int64(-7)), stack_backend.ValueKindInt64, func(v stack_backend.Value) bool { return v.Int64() == -7 }},
+		{stack.F("u", uint64(9)), stack_backend.ValueKindUint64, func(v stack_backend.Value) bool { return v.Uint64() == 9 }},
+		{stack.F("f", 3.5), stack_backend.ValueKindFloat64, func(v stack_backend.Value) bool { return v.Float64() == 3.5 }},
+		{stack.F("b", true), stack_backend.ValueKindBool, func(v stack_backend.Value) bool { return v.Bool() }},
+		{stack.F("d", 5*time.Second), stack_backend.ValueKindDuration, func(v stack_backend.Value) bool { return v.Duration() == 5*time.Second }},
+		{stack.F("t", now), stack_backend.ValueKindTime, func(v stack_backend.Value) bool { return v.Time().UnixNano() == now.UnixNano() }},
+		{stack.F("e", err), stack_backend.ValueKindError, func(v stack_backend.Value) bool { return v.Error() == err }},
+		{stack.F("r", stack_backend.RawAttrValue("raw!")), stack_backend.ValueKindRaw, func(v stack_backend.Value) bool { return v.String() == "raw!" }},
+		{stack.F("m", map[string]int{"x": 1}), stack_backend.ValueKindAny, func(v stack_backend.Value) bool {
+			m, ok := v.Any().(map[string]int)
+			return ok && m["x"] == 1
+		}},
+	}
+
+	for _, c := range cases {
+		if got := c.attr.Value.Kind(); got != c.kind {
+			t.Errorf("attr %q: kind = %v, want %v", c.attr.Name, got, c.kind)
+		}
+		if !c.checkVal(c.attr.Value) {
+			t.Errorf("attr %q: value round-trip failed", c.attr.Name)
+		}
+	}
+
+	// Zero time takes the boxed fallback but keeps the kind.
+	zt := stack.F("zt", time.Time{})
+	if zt.Value.Kind() != stack_backend.ValueKindTime || !zt.Value.Time().IsZero() {
+		t.Errorf("zero time: kind=%v isZero=%v", zt.Value.Kind(), zt.Value.Time().IsZero())
+	}
+}
+
+// Value implements json.Marshaler: the json backend marshals whole Events.
+func TestValueMarshalJSON(t *testing.T) {
+	attrs := map[string]stack_backend.Value{
+		"s": stack.F("", "text").Value,
+		"i": stack.F("", -5).Value,
+		"f": stack.F("", 2.25).Value,
+		"b": stack.F("", true).Value,
+		"e": stack.F("", errors.New("boom")).Value,
+	}
+	data, err := json.Marshal(attrs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	for _, want := range []string{`"s":"text"`, `"i":-5`, `"f":2.25`, `"b":true`, `"e":"boom"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("marshal: %s missing in %s", want, got)
+		}
+	}
+}
+
+// The lazy StackTrace resolves to frames containing this test function.
+func TestStackTraceResolves(t *testing.T) {
+	st := stack_backend.Stacktrace(-3) // компенсируем baseSkip: тест зовёт напрямую, а не через log()
+	if len(st) == 0 {
+		t.Fatal("empty stack trace")
+	}
+	var funcs []string
+	st.Frames(func(f stack_backend.Frame) bool {
+		funcs = append(funcs, f.Function)
+		return true
+	})
+	joined := strings.Join(funcs, "\n")
+	if !strings.Contains(joined, "TestStackTraceResolves") {
+		t.Fatalf("resolved frames do not contain the test function:\n%s", joined)
+	}
+	if s := st.String(); !strings.Contains(s, "TestStackTraceResolves") || !strings.Contains(s, ".go:") {
+		t.Fatalf("String() malformed:\n%s", s)
+	}
+	if data, err := json.Marshal(st); err != nil || !strings.Contains(string(data), "TestStackTraceResolves") {
+		t.Fatalf("MarshalJSON: err=%v data=%s", err, data)
+	}
+}
+
+// stack.Error captures a lazy trace end-to-end and the text backend renders it.
+func TestErrorStackTraceRendered(t *testing.T) {
+	var buf bytes.Buffer
+	ctx := stack.With().Backend(stack_backend_text.NewWithWriter(&buf)).Apply(context.Background())
+
+	c, done := stack.Span(ctx)
+	stack.Error(c, "explosion", errors.New("bang"))
+	done()
+
+	out := buf.String()
+	if !strings.Contains(out, "TestErrorStackTraceRendered") {
+		t.Fatalf("stack trace frame missing in output:\n%s", out)
 	}
 }

@@ -76,10 +76,10 @@ func (b Backend) Handle(e stack_backend.Event) {
 			// nested logs would be lost in OTLP.
 			attrs := l.Attrs
 			if l.Level != "" {
-				attrs = append(attrs[:len(attrs):len(attrs)], stack_backend.Attr{Name: "level", Value: l.Level})
+				attrs = append(attrs[:len(attrs):len(attrs)], stack_backend.Attr{Name: "level", Value: stack_backend.StringValue(l.Level)})
 			}
 			if l.Error != nil {
-				attrs = append(attrs[:len(attrs):len(attrs)], stack_backend.Attr{Name: "error", Value: l.Error.Error()})
+				attrs = append(attrs[:len(attrs):len(attrs)], stack_backend.Attr{Name: "error", Value: stack_backend.StringValue(l.Error.Error())})
 			}
 			span.Events = append(span.Events, &trace_model_v1.Span_Event{
 				Name:         l.Name,
@@ -92,6 +92,20 @@ func (b Backend) Handle(e stack_backend.Event) {
 			span.Status = &trace_model_v1.Status{
 				Code:    trace_model_v1.Status_STATUS_CODE_ERROR,
 				Message: e.State.Span.Error.Error(),
+			}
+
+			// Per OTel semconv, the exception carries the resolved stack
+			// trace as an "exception" span event. Symbols are resolved here,
+			// once, at export time (the core keeps only raw PCs).
+			if st := e.State.Span.ErrorStackTrace; st != nil {
+				span.Events = append(span.Events, &trace_model_v1.Span_Event{
+					Name:         "exception",
+					TimeUnixNano: uint64(e.State.Span.EndTime.UnixNano()),
+					Attributes: attrsToKeyValue([]stack_backend.Attr{
+						{Name: "exception.message", Value: stack_backend.StringValue(e.State.Span.Error.Error())},
+						{Name: "exception.stacktrace", Value: stack_backend.StringValue(st.String())},
+					}),
+				})
 			}
 		}
 
@@ -128,7 +142,15 @@ func (b Backend) Handle(e stack_backend.Event) {
 		// The log's error is exported as a separate attribute (it used to be lost entirely).
 		if e.LogEvent.Error != nil {
 			log.Attributes = append(log.Attributes, attrsToKeyValue([]stack_backend.Attr{
-				{Name: "error", Value: e.LogEvent.Error.Error()},
+				{Name: "error", Value: stack_backend.StringValue(e.LogEvent.Error.Error())},
+			})...)
+		}
+
+		// The resolved stack trace goes into the semconv attribute; raw PCs
+		// are resolved once, here at export time.
+		if st := e.LogEvent.StackTrace; st != nil {
+			log.Attributes = append(log.Attributes, attrsToKeyValue([]stack_backend.Attr{
+				{Name: "exception.stacktrace", Value: stack_backend.StringValue(st.String())},
 			})...)
 		}
 
@@ -163,9 +185,9 @@ func (b Backend) Handle(e stack_backend.Event) {
 // exported at all).
 func (b Backend) resource(e stack_backend.Event) *resource_model_v1.Resource {
 	attrs := []stack_backend.Attr{
-		{Name: "service.name", Value: e.State.Options.ServiceName},
-		{Name: "deployment.environment", Value: e.State.Options.Environment},
-		{Name: "service.instance.id", Value: e.State.Options.Instance},
+		{Name: "service.name", Value: stack_backend.StringValue(e.State.Options.ServiceName)},
+		{Name: "deployment.environment", Value: stack_backend.StringValue(e.State.Options.Environment)},
+		{Name: "service.instance.id", Value: stack_backend.StringValue(e.State.Options.Instance)},
 	}
 	attrs = append(attrs, e.State.Options.ScopeAttrs...)
 	return &resource_model_v1.Resource{

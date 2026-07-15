@@ -13,7 +13,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/DataDog/gostackparse"
 	"github.com/fatih/color"
 	"github.com/themakers/stack/stack_backend"
 )
@@ -122,7 +121,7 @@ type record struct {
 	OwnAttrs    []stack_backend.Attr
 	NestedAttrs []stack_backend.Attr
 
-	StackTrace *gostackparse.Goroutine
+	StackTrace stack_backend.StackTrace
 }
 
 func (b Backend) write(w io.Writer, r record) error {
@@ -217,24 +216,40 @@ func writeAttrs(buf *bytes.Buffer, attrs []stack_backend.Attr, cc colorCode) {
 	}
 }
 
-func writeStackTrace(buf *bytes.Buffer, st *gostackparse.Goroutine) {
-	for _, frm := range st.Stack {
-		if frm == nil {
-			continue
-		}
+// writeStackTrace renders the lazily-resolved trace. Resolution happens here,
+// at render time, via the core's StackTrace.Frames iterator — frames are
+// written straight into the pooled buffer without intermediate slices.
+func writeStackTrace(buf *bytes.Buffer, st stack_backend.StackTrace) {
+	st.Frames(func(frm stack_backend.Frame) bool {
 		buf.WriteString("     ••• ")
-		buf.WriteString(frm.Func)
+		buf.WriteString(frm.Function)
 		buf.WriteString("\n                 ")
 
-		seg := strings.Split(frm.File, string(rune(filepath.Separator)))
-		if len(seg) >= 5 {
-			seg = seg[len(seg)-5:]
+		file := frm.File
+		if idx := nthSeparatorFromEnd(file, 5); idx >= 0 {
+			file = file[idx+1:]
 		}
-		buf.WriteString(filepath.Join(seg...))
+		buf.WriteString(file)
 		buf.WriteByte(':')
 		buf.Write(strconv.AppendInt(buf.AvailableBuffer(), int64(frm.Line), 10))
 		buf.WriteString(" ••• \n")
+		return true
+	})
+}
+
+// nthSeparatorFromEnd returns the index of the n-th path separator counting
+// from the end, or -1 (used to shorten file paths to their last n segments
+// without allocating, unlike strings.Split+filepath.Join).
+func nthSeparatorFromEnd(s string, n int) int {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == filepath.Separator {
+			n--
+			if n == 0 {
+				return i
+			}
+		}
 	}
+	return -1
 }
 
 // writePadded writes s right-padded with spaces to width (equivalent of %-5s).
@@ -246,48 +261,44 @@ func writePadded(buf *bytes.Buffer, s string, width int) {
 }
 
 // appendValue writes an attribute value into the buffer without intermediate
-// strings for common types. Reflective json.Marshal is reserved for rare
-// complex values (map/struct/slice). RawAttrValue is printed as-is.
-func appendValue(buf *bytes.Buffer, v any) {
+// strings. The Value union carries its kind — dispatching on it is a plain
+// integer switch, cheaper than an interface type-switch. Reflective
+// json.Marshal is reserved for rare complex values (map/struct/slice).
+// ValueKindRaw is printed as-is.
+func appendValue(buf *bytes.Buffer, v stack_backend.Value) {
+	switch v.Kind() {
+	case stack_backend.ValueKindRaw:
+		buf.WriteString(v.String())
+	case stack_backend.ValueKindString:
+		appendJSONString(buf, v.String())
+	case stack_backend.ValueKindBool:
+		buf.Write(strconv.AppendBool(buf.AvailableBuffer(), v.Bool()))
+	case stack_backend.ValueKindInt64:
+		buf.Write(strconv.AppendInt(buf.AvailableBuffer(), v.Int64(), 10))
+	case stack_backend.ValueKindUint64:
+		buf.Write(strconv.AppendUint(buf.AvailableBuffer(), v.Uint64(), 10))
+	case stack_backend.ValueKindFloat64:
+		buf.Write(strconv.AppendFloat(buf.AvailableBuffer(), v.Float64(), 'g', -1, 64))
+	case stack_backend.ValueKindDuration:
+		buf.WriteString(v.Duration().String())
+	case stack_backend.ValueKindTime:
+		buf.Write(v.Time().AppendFormat(buf.AvailableBuffer(), time.RFC3339Nano))
+	case stack_backend.ValueKindError:
+		if err := v.Error(); err != nil {
+			appendJSONString(buf, err.Error())
+		} else {
+			buf.WriteString("null")
+		}
+	default:
+		appendAnyValue(buf, v.Any())
+	}
+}
+
+// appendAnyValue is the cold path for ValueKindAny payloads.
+func appendAnyValue(buf *bytes.Buffer, v any) {
 	switch val := v.(type) {
-	case stack_backend.RawAttrValue:
-		buf.WriteString(string(val))
-	case string:
-		appendJSONString(buf, val)
 	case []byte:
 		appendJSONString(buf, string(val))
-	case bool:
-		buf.Write(strconv.AppendBool(buf.AvailableBuffer(), val))
-	case int:
-		buf.Write(strconv.AppendInt(buf.AvailableBuffer(), int64(val), 10))
-	case int8:
-		buf.Write(strconv.AppendInt(buf.AvailableBuffer(), int64(val), 10))
-	case int16:
-		buf.Write(strconv.AppendInt(buf.AvailableBuffer(), int64(val), 10))
-	case int32:
-		buf.Write(strconv.AppendInt(buf.AvailableBuffer(), int64(val), 10))
-	case int64:
-		buf.Write(strconv.AppendInt(buf.AvailableBuffer(), val, 10))
-	case uint:
-		buf.Write(strconv.AppendUint(buf.AvailableBuffer(), uint64(val), 10))
-	case uint8:
-		buf.Write(strconv.AppendUint(buf.AvailableBuffer(), uint64(val), 10))
-	case uint16:
-		buf.Write(strconv.AppendUint(buf.AvailableBuffer(), uint64(val), 10))
-	case uint32:
-		buf.Write(strconv.AppendUint(buf.AvailableBuffer(), uint64(val), 10))
-	case uint64:
-		buf.Write(strconv.AppendUint(buf.AvailableBuffer(), val, 10))
-	case float32:
-		buf.Write(strconv.AppendFloat(buf.AvailableBuffer(), float64(val), 'g', -1, 32))
-	case float64:
-		buf.Write(strconv.AppendFloat(buf.AvailableBuffer(), val, 'g', -1, 64))
-	case time.Duration:
-		buf.WriteString(val.String())
-	case time.Time:
-		buf.Write(val.AppendFormat(buf.AvailableBuffer(), time.RFC3339Nano))
-	case error:
-		appendJSONString(buf, val.Error())
 	case nil:
 		buf.WriteString("null")
 	default:

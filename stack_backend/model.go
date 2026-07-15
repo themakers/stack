@@ -1,7 +1,6 @@
 package stack_backend
 
 import (
-	"github.com/DataDog/gostackparse"
 	"time"
 )
 
@@ -19,7 +18,7 @@ var _ Option = Attr{}
 
 type Attr struct {
 	Name  string
-	Value any
+	Value Value
 }
 
 func (a Attr) ApplyToStack(s *Stack) {
@@ -71,5 +70,5 @@ type LogEvent struct {
 	IsTypedLog bool
 
 	OwnAttrs   []Attr
-	StackTrace *gostackparse.Goroutine
+	StackTrace StackTrace
 }

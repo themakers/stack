@@ -9,20 +9,65 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/DataDog/gostackparse"
-
 	"github.com/themakers/stack/stack_backend"
 	"github.com/themakers/stack/stack_backend/stack_backend_text"
 )
 
 type A = stack_backend.Attr
 
-func Attr(name string, value any) A {
-	return A{Name: name, Value: value}
+// Attr and F build an attribute. Generic on purpose: the value is captured
+// with its static type and dispatched via a pointer type-switch, so common
+// kinds (string, ints, bool, float, duration, time) are packed into
+// stack_backend.Value with zero heap allocations — a plain `any` parameter
+// would box every escaping non-pointer value on the caller side.
+func Attr[T any](name string, value T) A {
+	return F(name, value)
 }
 
-func F(name string, value any) A {
-	return A{Name: name, Value: value}
+func F[T any](name string, value T) A {
+	var val stack_backend.Value
+	switch p := any(&value).(type) {
+	case *string:
+		val = stack_backend.StringValue(*p)
+	case *int:
+		val = stack_backend.Int64Value(int64(*p))
+	case *int8:
+		val = stack_backend.Int64Value(int64(*p))
+	case *int16:
+		val = stack_backend.Int64Value(int64(*p))
+	case *int32:
+		val = stack_backend.Int64Value(int64(*p))
+	case *int64:
+		val = stack_backend.Int64Value(*p)
+	case *uint:
+		val = stack_backend.Uint64Value(uint64(*p))
+	case *uint8:
+		val = stack_backend.Uint64Value(uint64(*p))
+	case *uint16:
+		val = stack_backend.Uint64Value(uint64(*p))
+	case *uint32:
+		val = stack_backend.Uint64Value(uint64(*p))
+	case *uint64:
+		val = stack_backend.Uint64Value(*p)
+	case *bool:
+		val = stack_backend.BoolValue(*p)
+	case *float32:
+		val = stack_backend.Float64Value(float64(*p))
+	case *float64:
+		val = stack_backend.Float64Value(*p)
+	case *time.Duration:
+		val = stack_backend.DurationValue(*p)
+	case *time.Time:
+		val = stack_backend.TimeValue(*p)
+	case *stack_backend.RawAttrValue:
+		val = stack_backend.RawValue(*p)
+	case *stack_backend.Value:
+		val = *p
+	default:
+		// Interfaces (incl. error), maps, structs, slices: boxed as-is.
+		val = stack_backend.AnyValue(value)
+	}
+	return A{Name: name, Value: val}
 }
 
 // COMMON
@@ -180,7 +225,7 @@ func Span(ctx context.Context, opts ...stack_backend.Option) (context.Context, e
 // ▐▙▄▄▖▝▚▄▞▘▝▚▄▞▘▝▚▄▞▘▗▄█▄▖▐▌  ▐▌▝▚▄▞▘
 //
 
-func log(ctx context.Context, level, name string, err error, st *gostackparse.Goroutine, attrs ...A) {
+func log(ctx context.Context, level, name string, err error, st stack_backend.StackTrace, attrs ...A) {
 
 	var (
 		t             = time.Now()
@@ -302,7 +347,7 @@ func TLog(ctx context.Context, typed any) {
 
 		attrs = append(attrs, A{
 			Name:  fieldName,
-			Value: fieldValue.Interface(),
+			Value: stack_backend.AnyValue(fieldValue.Interface()),
 		})
 	}
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/themakers/stack"
 	"github.com/themakers/stack/stack_backend"
@@ -44,6 +45,25 @@ func BenchmarkInfo_3StringAttrs(b *testing.B) {
 			stack.F("request_url_path", "/api/v1/order"),
 			stack.F("method", "POST"),
 			stack.F("session", "abc123"),
+		)
+	}
+}
+
+// BenchmarkInfo_DynamicAttrs — attrs with dynamic (non-constant) values: this
+// is where union Value shows up — constant strings box for free via static
+// read-only eface data, dynamic values used to allocate per attribute.
+func BenchmarkInfo_DynamicAttrs(b *testing.B) {
+	ctx, done := stack.Span(benchCtx())
+	defer done()
+	path := time.Now().Format("/2006/01/02/order")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		stack.Info(ctx, "request handled",
+			stack.F("request_url_path", path),
+			stack.F("attempt", i),
+			stack.F("ok", i%2 == 0),
+			stack.F("elapsed", time.Duration(i)*time.Microsecond),
 		)
 	}
 }
@@ -120,10 +140,10 @@ func makeSpanEndEvent() stack_backend.Event {
 	s.Span.File = "/src/app/handler.go"
 	s.Span.Line = 42
 	s.Span.Attrs = []stack_backend.Attr{
-		{Name: "request_url_path", Value: "/api/v1/order"},
-		{Name: "method", Value: "POST"},
-		{Name: "session", Value: "abc123"},
-		{Name: "user", Value: "u-42"},
+		{Name: "request_url_path", Value: stack_backend.StringValue("/api/v1/order")},
+		{Name: "method", Value: stack_backend.StringValue("POST")},
+		{Name: "session", Value: stack_backend.StringValue("abc123")},
+		{Name: "user", Value: stack_backend.StringValue("u-42")},
 	}
 	return stack_backend.Event{Kind: stack_backend.KindSpanEnd, State: s}
 }
@@ -133,18 +153,18 @@ func makeLogEvent(withMap bool) stack_backend.Event {
 	s.Span.TraceID = stack_backend.NewTraceID()
 	s.Span.ID = stack_backend.NewID()
 	s.Span.Attrs = []stack_backend.Attr{
-		{Name: "request_url_path", Value: "/api/v1/order"},
-		{Name: "method", Value: "POST"},
+		{Name: "request_url_path", Value: stack_backend.StringValue("/api/v1/order")},
+		{Name: "method", Value: stack_backend.StringValue("POST")},
 	}
 	own := []stack_backend.Attr{
-		{Name: "session", Value: "abc123"},
-		{Name: "user", Value: "u-42"},
-		{Name: "level", Value: "info"},
+		{Name: "session", Value: stack_backend.StringValue("abc123")},
+		{Name: "user", Value: stack_backend.StringValue("u-42")},
+		{Name: "level", Value: stack_backend.StringValue("info")},
 	}
 	if withMap {
 		own = append(own, stack_backend.Attr{
 			Name:  "payload",
-			Value: map[string]any{"a": 1, "b": "x", "c": true},
+			Value: stack_backend.AnyValue(map[string]any{"a": 1, "b": "x", "c": true}),
 		})
 	}
 	return stack_backend.Event{

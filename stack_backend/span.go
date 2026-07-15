@@ -14,8 +14,6 @@ import (
 	"sync"
 	"time"
 	"unsafe"
-
-	"github.com/DataDog/gostackparse"
 )
 
 type Option interface {
@@ -269,7 +267,7 @@ type Span struct {
 	EndTime time.Time
 
 	Error           error
-	ErrorStackTrace *gostackparse.Goroutine
+	ErrorStackTrace StackTrace
 
 	Attrs []Attr
 
@@ -408,38 +406,4 @@ func Operation(skip int) (funcName string, file string, line int) {
 	} else {
 		return unknown, unknown, -1
 	}
-}
-
-// Stacktrace collects the call stack via runtime.Callers/CallersFrames instead
-// of debug.Stack()+text parsing. This is an order of magnitude cheaper in
-// allocations (no multi-kilobyte text dump and its parsing) and does not panic
-// on empty/malformed input. The return type is preserved
-// (*gostackparse.Goroutine) — compatibility with backends reading .Stack.
-//
-// The PC buffer lives on the stack ([64]uintptr) — runtime.Callers does not
-// retain it; only the resulting frames go to the heap.
-func Stacktrace(skip int) *gostackparse.Goroutine {
-	const baseSkip = 3 // Callers + Stacktrace + the calling log()
-
-	var pcbuf [64]uintptr
-	n := runtime.Callers(baseSkip+skip, pcbuf[:])
-	if n == 0 {
-		return &gostackparse.Goroutine{}
-	}
-
-	frames := runtime.CallersFrames(pcbuf[:n])
-	g := &gostackparse.Goroutine{}
-	for {
-		frame, more := frames.Next()
-		g.Stack = append(g.Stack, &gostackparse.Frame{
-			Func: frame.Function,
-			File: frame.File,
-			Line: frame.Line,
-		})
-		if !more {
-			break
-		}
-	}
-
-	return g
 }
