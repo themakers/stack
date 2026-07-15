@@ -44,12 +44,19 @@ type OTLPSink interface {
 	ExportTraces(ctx context.Context, td *trace_model_v1.TracesData) error
 }
 
+// Backend is the synchronous OTel backend: every event is exported by its own
+// gRPC call on the caller's goroutine. Fine for tests and short-lived tools;
+// for hot paths use NewBatched.
 type Backend struct {
 	sink OTLPSink
 }
 
+// New creates a synchronous OTel backend. Panics on nil sink (startup
+// configuration error — fail fast, same as an invalid collector target).
 func New(sink OTLPSink) stack_backend.Backend {
-
+	if sink == nil {
+		panic("stack_backend_otel: nil sink")
+	}
 	return Backend{
 		sink: sink,
 	}
@@ -59,131 +66,139 @@ func (b Backend) Handle(e stack_backend.Event) {
 	ctx := context.Background()
 
 	if e.Kind&stack_backend.KindSpanEnd != 0 {
-
-		span := &trace_model_v1.Span{
-			Name:              e.State.Span.Name,
-			TraceId:           e.State.Span.TraceID.Bytes(),
-			SpanId:            e.State.Span.ID.Bytes(),
-			ParentSpanId:      e.State.Span.ParentSpanID.Bytes(),
-			StartTimeUnixNano: uint64(e.State.Span.Time.UnixNano()),
-			EndTimeUnixNano:   uint64(e.State.Span.EndTime.UnixNano()),
-			Attributes:        attrsToKeyValue(e.State.Span.Attrs),
-		}
-
-		for _, l := range e.State.Span.OwnLogs {
-			// Level/Error are stored as SpanLog fields (not in Attrs) — add
-			// them as event attributes, otherwise the level and error of
-			// nested logs would be lost in OTLP.
-			attrs := l.Attrs
-			if l.Level != "" {
-				attrs = append(attrs[:len(attrs):len(attrs)], stack_backend.Attr{Name: "level", Value: stack_backend.StringValue(l.Level)})
-			}
-			if l.Error != nil {
-				attrs = append(attrs[:len(attrs):len(attrs)], stack_backend.Attr{Name: "error", Value: stack_backend.StringValue(l.Error.Error())})
-			}
-			span.Events = append(span.Events, &trace_model_v1.Span_Event{
-				Name:         l.Name,
-				Attributes:   attrsToKeyValue(attrs),
-				TimeUnixNano: uint64(l.Time.UnixNano()),
-			})
-		}
-
-		if e.State.Span.Error != nil {
-			span.Status = &trace_model_v1.Status{
-				Code:    trace_model_v1.Status_STATUS_CODE_ERROR,
-				Message: e.State.Span.Error.Error(),
-			}
-
-			// Per OTel semconv, the exception carries the resolved stack
-			// trace as an "exception" span event. Symbols are resolved here,
-			// once, at export time (the core keeps only raw PCs).
-			if st := e.State.Span.ErrorStackTrace; st != nil {
-				span.Events = append(span.Events, &trace_model_v1.Span_Event{
-					Name:         "exception",
-					TimeUnixNano: uint64(e.State.Span.EndTime.UnixNano()),
-					Attributes: attrsToKeyValue([]stack_backend.Attr{
-						{Name: "exception.message", Value: stack_backend.StringValue(e.State.Span.Error.Error())},
-						{Name: "exception.stacktrace", Value: stack_backend.StringValue(st.String())},
-					}),
-				})
-			}
-		}
-
 		// The logger must not panic when the collector is unreachable.
 		reportExportError("traces", b.sink.ExportTraces(ctx, &trace_model_v1.TracesData{
 			ResourceSpans: []*trace_model_v1.ResourceSpans{
 				{
-					Resource: b.resource(e),
+					Resource: buildResource(e),
 					ScopeSpans: []*trace_model_v1.ScopeSpans{
 						{
 							Spans: []*trace_model_v1.Span{
-								span,
+								convertSpan(e),
 							},
 						},
 					},
 				},
 			},
 		}))
-
 	} else if e.Kind&stack_backend.KindLog != 0 {
-
-		log := &logs_model_v1.LogRecord{
-			Body: &common_model_v1.AnyValue{
-				Value: &common_model_v1.AnyValue_StringValue{
-					StringValue: e.LogEvent.Name,
-				},
-			},
-			SeverityNumber: severityNumber(e.LogEvent.Level),
-			SeverityText:   e.LogEvent.Level,
-			Attributes:     attrsToKeyValue(e.LogEvent.OwnAttrs),
-			TimeUnixNano:   uint64(e.LogEvent.Time.UnixNano()),
-		}
-
-		// The log's error is exported as a separate attribute (it used to be lost entirely).
-		if e.LogEvent.Error != nil {
-			log.Attributes = append(log.Attributes, attrsToKeyValue([]stack_backend.Attr{
-				{Name: "error", Value: stack_backend.StringValue(e.LogEvent.Error.Error())},
-			})...)
-		}
-
-		// The resolved stack trace goes into the semconv attribute; raw PCs
-		// are resolved once, here at export time.
-		if st := e.LogEvent.StackTrace; st != nil {
-			log.Attributes = append(log.Attributes, attrsToKeyValue([]stack_backend.Attr{
-				{Name: "exception.stacktrace", Value: stack_backend.StringValue(st.String())},
-			})...)
-		}
-
-		if !e.State.Span.ID.IsZero() {
-			log.TraceId = e.State.Span.TraceID.Bytes()
-			log.SpanId = e.State.Span.ID.Bytes()
-
-			log.Attributes = append(log.Attributes, attrsToKeyValue(e.State.Span.Attrs)...)
-		}
-
 		reportExportError("logs", b.sink.ExportLogs(ctx, &logs_model_v1.LogsData{
 			ResourceLogs: []*logs_model_v1.ResourceLogs{
 				{
-					Resource: b.resource(e),
+					Resource: buildResource(e),
 					ScopeLogs: []*logs_model_v1.ScopeLogs{
 						{
 							LogRecords: []*logs_model_v1.LogRecord{
-								log,
+								convertLog(e),
 							},
 						},
 					},
 				},
 			},
 		}))
-
 	}
-
 }
 
-// resource builds the OTLP Resource from scope options. Includes the base
+// convertSpan builds the OTLP span from a span-end event. Conversion happens
+// synchronously in Handle (the Event contract forbids retaining e.State), so
+// the batched backend can safely queue the resulting proto.
+func convertSpan(e stack_backend.Event) *trace_model_v1.Span {
+	span := &trace_model_v1.Span{
+		Name:              e.State.Span.Name,
+		TraceId:           e.State.Span.TraceID.Bytes(),
+		SpanId:            e.State.Span.ID.Bytes(),
+		ParentSpanId:      e.State.Span.ParentSpanID.Bytes(),
+		StartTimeUnixNano: uint64(e.State.Span.Time.UnixNano()),
+		EndTimeUnixNano:   uint64(e.State.Span.EndTime.UnixNano()),
+		Attributes:        attrsToKeyValue(e.State.Span.Attrs),
+	}
+
+	for _, l := range e.State.Span.OwnLogs {
+		// Level/Error are stored as SpanLog fields (not in Attrs) — add
+		// them as event attributes, otherwise the level and error of
+		// nested logs would be lost in OTLP.
+		attrs := l.Attrs
+		if l.Level != "" {
+			attrs = append(attrs[:len(attrs):len(attrs)], stack_backend.Attr{Name: "level", Value: stack_backend.StringValue(l.Level)})
+		}
+		if l.Error != nil {
+			attrs = append(attrs[:len(attrs):len(attrs)], stack_backend.Attr{Name: "error", Value: stack_backend.StringValue(l.Error.Error())})
+		}
+		span.Events = append(span.Events, &trace_model_v1.Span_Event{
+			Name:         l.Name,
+			Attributes:   attrsToKeyValue(attrs),
+			TimeUnixNano: uint64(l.Time.UnixNano()),
+		})
+	}
+
+	if e.State.Span.Error != nil {
+		span.Status = &trace_model_v1.Status{
+			Code:    trace_model_v1.Status_STATUS_CODE_ERROR,
+			Message: e.State.Span.Error.Error(),
+		}
+
+		// Per OTel semconv, the exception carries the resolved stack
+		// trace as an "exception" span event. Symbols are resolved here,
+		// once, at export time (the core keeps only raw PCs).
+		if st := e.State.Span.ErrorStackTrace; st != nil {
+			span.Events = append(span.Events, &trace_model_v1.Span_Event{
+				Name:         "exception",
+				TimeUnixNano: uint64(e.State.Span.EndTime.UnixNano()),
+				Attributes: attrsToKeyValue([]stack_backend.Attr{
+					{Name: "exception.message", Value: stack_backend.StringValue(e.State.Span.Error.Error())},
+					{Name: "exception.stacktrace", Value: stack_backend.StringValue(st.String())},
+				}),
+			})
+		}
+	}
+
+	return span
+}
+
+// convertLog builds the OTLP log record from a log event (see convertSpan on
+// why conversion is synchronous).
+func convertLog(e stack_backend.Event) *logs_model_v1.LogRecord {
+	log := &logs_model_v1.LogRecord{
+		Body: &common_model_v1.AnyValue{
+			Value: &common_model_v1.AnyValue_StringValue{
+				StringValue: e.LogEvent.Name,
+			},
+		},
+		SeverityNumber: severityNumber(e.LogEvent.Level),
+		SeverityText:   e.LogEvent.Level,
+		Attributes:     attrsToKeyValue(e.LogEvent.OwnAttrs),
+		TimeUnixNano:   uint64(e.LogEvent.Time.UnixNano()),
+	}
+
+	// The log's error is exported as a separate attribute (it used to be lost entirely).
+	if e.LogEvent.Error != nil {
+		log.Attributes = append(log.Attributes, attrsToKeyValue([]stack_backend.Attr{
+			{Name: "error", Value: stack_backend.StringValue(e.LogEvent.Error.Error())},
+		})...)
+	}
+
+	// The resolved stack trace goes into the semconv attribute; raw PCs
+	// are resolved once, here at export time.
+	if st := e.LogEvent.StackTrace; st != nil {
+		log.Attributes = append(log.Attributes, attrsToKeyValue([]stack_backend.Attr{
+			{Name: "exception.stacktrace", Value: stack_backend.StringValue(st.String())},
+		})...)
+	}
+
+	if !e.State.Span.ID.IsZero() {
+		log.TraceId = e.State.Span.TraceID.Bytes()
+		log.SpanId = e.State.Span.ID.Bytes()
+
+		log.Attributes = append(log.Attributes, attrsToKeyValue(e.State.Span.Attrs)...)
+	}
+
+	return log
+}
+
+// buildResource builds the OTLP Resource from scope options. Includes the base
 // service.* attributes and arbitrary ScopeAttrs (the latter used to not be
 // exported at all).
-func (b Backend) resource(e stack_backend.Event) *resource_model_v1.Resource {
+func buildResource(e stack_backend.Event) *resource_model_v1.Resource {
 	attrs := []stack_backend.Attr{
 		{Name: "service.name", Value: stack_backend.StringValue(e.State.Options.ServiceName)},
 		{Name: "deployment.environment", Value: stack_backend.StringValue(e.State.Options.Environment)},

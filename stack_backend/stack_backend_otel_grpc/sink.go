@@ -19,8 +19,9 @@ import (
 
 // exportTimeout bounds the export duration: context.Background() with no
 // deadline used to be passed — with an unreachable collector, Export could
-// hang indefinitely, blocking the synchronous logging path.
-const exportTimeout = 5 * time.Second
+// hang indefinitely. 30s follows the OTel SDK batch processor default: with
+// the batched backend the export runs on the worker, not in the hot path.
+const exportTimeout = 30 * time.Second
 
 var _ stack_backend_otel.OTLPSink = (*Sink)(nil)
 

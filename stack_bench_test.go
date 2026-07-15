@@ -27,8 +27,8 @@ func benchCtx() context.Context {
 func BenchmarkSpanOpenClose(b *testing.B) {
 	ctx := benchCtx()
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	
+	for b.Loop() {
 		_, done := stack.Span(ctx)
 		done()
 	}
@@ -40,7 +40,7 @@ func BenchmarkInfo_3StringAttrs(b *testing.B) {
 	defer done()
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		stack.Info(ctx, "request handled",
 			stack.F("request_url_path", "/api/v1/order"),
 			stack.F("method", "POST"),
@@ -74,8 +74,8 @@ func BenchmarkError(b *testing.B) {
 	defer done()
 	err := errors.New("boom")
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	
+	for b.Loop() {
 		_ = stack.Error(ctx, "operation failed", err,
 			stack.F("code", 500),
 		)
@@ -87,8 +87,8 @@ func BenchmarkTextHandle_SpanEnd(b *testing.B) {
 	backend := stack_backend_text.NewWithWriter(io.Discard)
 	e := makeSpanEndEvent()
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	
+	for b.Loop() {
 		backend.Handle(e)
 	}
 }
@@ -98,8 +98,8 @@ func BenchmarkTextHandle_Log(b *testing.B) {
 	backend := stack_backend_text.NewWithWriter(io.Discard)
 	e := makeLogEvent(false)
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	
+	for b.Loop() {
 		backend.Handle(e)
 	}
 }
@@ -110,8 +110,8 @@ func BenchmarkTextHandle_LogMapAttr(b *testing.B) {
 	backend := stack_backend_text.NewWithWriter(io.Discard)
 	e := makeLogEvent(true)
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	
+	for b.Loop() {
 		backend.Handle(e)
 	}
 }
@@ -120,8 +120,8 @@ func BenchmarkTextHandle_LogMapAttr(b *testing.B) {
 func BenchmarkFullPath(b *testing.B) {
 	ctx := benchCtx()
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	
+	for b.Loop() {
 		c, done := stack.Span(ctx)
 		stack.Info(c, "processing",
 			stack.F("request_url_path", "/api/v1/order"),
