@@ -101,6 +101,11 @@ func Span(ctx context.Context, opts ...stack_backend.Option) (context.Context, e
 	s.Span.Time = time.Now()
 	s.Span.OwnLogs = []stack_backend.SpanLog{}
 
+	// Новый спан не наследует ошибку родителя: Clone() — поверхностная
+	// копия, а Span.Error/ErrorStackTrace принадлежат конкретному спану.
+	s.Span.Error = nil
+	s.Span.ErrorStackTrace = nil
+
 	if s.Span.TraceID.IsZero() {
 		s.Span.TraceID = stack_backend.NewTraceID()
 	}
