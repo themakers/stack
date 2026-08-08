@@ -82,6 +82,29 @@ func BenchmarkError(b *testing.B) {
 	}
 }
 
+func BenchmarkErrorRelog(b *testing.B) {
+	ctx := benchCtx()
+	err := stack.Error(ctx, "origin failed", errors.New("boom"))
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		_ = stack.Error(ctx, "boundary failed", err)
+	}
+}
+
+func BenchmarkErrorOriginAndBoundary(b *testing.B) {
+	ctx := benchCtx()
+	raw := errors.New("boom")
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		err := stack.Error(ctx, "origin failed", raw)
+		_ = stack.Error(ctx, "boundary failed", err)
+	}
+}
+
 // BenchmarkTextHandle_SpanEnd — rendering a span-end event in the text backend.
 func BenchmarkTextHandle_SpanEnd(b *testing.B) {
 	backend := stack_backend_text.NewWithWriter(io.Discard)

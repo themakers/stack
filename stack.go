@@ -299,7 +299,17 @@ func Warn(ctx context.Context, name string, attrs ...A) {
 }
 
 func Error(ctx context.Context, name string, err error, attrs ...A) error {
-	log(ctx, stack_backend.LevelError, name, err, stack_backend.Stacktrace(0), attrs...)
+	var trace stack_backend.StackTrace
+	if err == nil {
+		trace = stack_backend.Stacktrace(0)
+	} else if traced, ok := errors.AsType[errorWithStackTrace](err); ok {
+		trace = traced.StackTrace()
+	} else {
+		trace = stack_backend.Stacktrace(0)
+		err = &tracedError{cause: err, trace: trace}
+	}
+
+	log(ctx, stack_backend.LevelError, name, err, trace, attrs...)
 	return err
 }
 
