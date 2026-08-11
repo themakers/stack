@@ -114,7 +114,8 @@ type record struct {
 	File     string
 	Line     int
 	Name     string
-	NameSfx  bool // append "()" to the name (spans store the name without the suffix)
+	NameSfx  bool   // append "()" to the name (spans store the name without the suffix)
+	Kind     string // span kind, rendered only when it is not the default "internal"
 	Error    string
 	Duration time.Duration
 
@@ -161,6 +162,16 @@ func (b Backend) write(w io.Writer, r record) error {
 		buf.WriteString("()")
 	}
 	buf.Write(ccName.suffix)
+
+	// span kind
+	if r.Kind != "" {
+		buf.WriteByte(' ')
+		buf.Write(ccOwnAttrs.prefix)
+		buf.WriteByte('[')
+		buf.WriteString(r.Kind)
+		buf.WriteByte(']')
+		buf.Write(ccOwnAttrs.suffix)
+	}
 
 	// duration
 	if r.Duration != 0 {
@@ -358,11 +369,13 @@ func (b Backend) Handle(e stack_backend.Event) {
 		r.Line = e.State.Span.Line
 		r.Time = e.State.Span.Time
 		r.OwnAttrs = e.State.Span.Attrs
+		r.Kind = spanKindLabel(e.State.Span.Kind)
 	} else if e.Kind&stack_backend.KindSpanEnd != 0 {
 		r.Name = e.State.Span.Name
 		r.NameSfx = true
 		r.Level = stack_backend.LevelSpanEnd
 		r.LevelCC = ccLvlSpanEnd
+		r.Kind = spanKindLabel(e.State.Span.Kind)
 		r.Time = e.State.Span.EndTime
 		r.Duration = e.State.Span.EndTime.Sub(e.State.Span.Time)
 		r.OwnAttrs = e.State.Span.Attrs
@@ -388,6 +401,15 @@ func (b Backend) Handle(e stack_backend.Event) {
 
 	// A write error must not panic — a logger must not crash the service.
 	_ = b.write(b.writer(), r)
+}
+
+// spanKindLabel renders the kind only when it carries information: "internal"
+// is the default and would be noise on every line.
+func spanKindLabel(kind stack_backend.SpanKind) string {
+	if kind == stack_backend.SpanKindInternal {
+		return ""
+	}
+	return kind.String()
 }
 
 func levelColor(level string) colorCode {

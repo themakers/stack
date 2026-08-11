@@ -93,6 +93,59 @@ func (options Options) Name(name string) Options {
 	}))
 }
 
+func (options Options) Kind(kind SpanKind) Options {
+	return append(options, OptionFunc(func(s *Stack) {
+		s.Span.Kind = kind
+	}))
+}
+
+// Link relates the span being created to a span in another trace. May be
+// called several times; a zero trace/span id is ignored (a caller passing
+// through an absent upstream context should not produce a broken link).
+func (options Options) Link(traceID TraceID, spanID ID, attrs ...Attr) Options {
+	return append(options, OptionFunc(func(s *Stack) {
+		if traceID.IsZero() || spanID.IsZero() {
+			return
+		}
+		s.Span.Links = append(s.Span.Links, Link{
+			TraceID: traceID,
+			SpanID:  spanID,
+			Attrs:   attrs,
+		})
+	}))
+}
+
+// LinkTraceparent links to the span encoded in a W3C traceparent header —
+// the shape trace context takes when it is stored (a queue item, a database
+// document) rather than passed in a live context. A malformed or empty value
+// is ignored.
+func (options Options) LinkTraceparent(traceparent string, attrs ...Attr) Options {
+	return append(options, OptionFunc(func(s *Stack) {
+		traceID, spanID, err := ParseW3CTraceParent(traceparent)
+		if err != nil {
+			return
+		}
+		s.Span.Links = append(s.Span.Links, Link{
+			TraceID: traceID,
+			SpanID:  spanID,
+			Attrs:   attrs,
+		})
+	}))
+}
+
+// NewTrace makes the span a root of its own trace: the inherited trace id and
+// parent span id are dropped. Needed for long-lived loops, where every
+// iteration is an independent operation — a single span (and a single trace)
+// spanning the process lifetime is useless for analysis. Relate iterations to
+// their cause with Link, not with parent-child.
+func (options Options) NewTrace() Options {
+	return append(options, OptionFunc(func(s *Stack) {
+		s.Span.TraceID = TraceID{}
+		s.Span.ID = ID{}
+		s.Span.ParentSpanID = ID{}
+	}))
+}
+
 func (options Options) TraceID(traceID []byte) Options {
 	return append(options, OptionFunc(func(s *Stack) {
 		if !TraceID(traceID).IsZero() {
@@ -239,6 +292,7 @@ func (s *Stack) Clone() *Stack {
 
 	cloned.Span.Attrs = clip(cloned.Span.Attrs)
 	cloned.Span.OwnLogs = clip(cloned.Span.OwnLogs)
+	cloned.Span.Links = clip(cloned.Span.Links)
 	cloned.Options.ScopeAttrs = clip(cloned.Options.ScopeAttrs)
 
 	return &cloned
@@ -259,6 +313,7 @@ type Span struct {
 	TraceID      TraceID
 
 	Name string
+	Kind SpanKind
 
 	File string
 	Line int
@@ -270,6 +325,8 @@ type Span struct {
 	ErrorStackTrace StackTrace
 
 	Attrs []Attr
+
+	Links []Link
 
 	OwnLogs []SpanLog
 }
@@ -342,7 +399,7 @@ func (id TraceID) MarshalJSON() ([]byte, error) {
 	if id.IsZero() {
 		return []byte("null"), nil
 	} else {
-		return []byte(fmt.Sprintf(`"%s"`, id)), nil
+		return fmt.Appendf(nil, `"%s"`, id), nil
 	}
 }
 
@@ -389,7 +446,7 @@ func (id ID) MarshalJSON() ([]byte, error) {
 	if id.IsZero() {
 		return []byte("null"), nil
 	} else {
-		return []byte(fmt.Sprintf(`"%s"`, id)), nil
+		return fmt.Appendf(nil, `"%s"`, id), nil
 	}
 }
 

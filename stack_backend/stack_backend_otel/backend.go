@@ -105,12 +105,21 @@ func (b Backend) Handle(e stack_backend.Event) {
 func convertSpan(e stack_backend.Event) *trace_model_v1.Span {
 	span := &trace_model_v1.Span{
 		Name:              e.State.Span.Name,
+		Kind:              spanKind(e.State.Span.Kind),
 		TraceId:           e.State.Span.TraceID.Bytes(),
 		SpanId:            e.State.Span.ID.Bytes(),
 		ParentSpanId:      e.State.Span.ParentSpanID.Bytes(),
 		StartTimeUnixNano: uint64(e.State.Span.Time.UnixNano()),
 		EndTimeUnixNano:   uint64(e.State.Span.EndTime.UnixNano()),
 		Attributes:        attrsToKeyValue(e.State.Span.Attrs),
+	}
+
+	for _, l := range e.State.Span.Links {
+		span.Links = append(span.Links, &trace_model_v1.Span_Link{
+			TraceId:    l.TraceID.Bytes(),
+			SpanId:     l.SpanID.Bytes(),
+			Attributes: attrsToKeyValue(l.Attrs),
+		})
 	}
 
 	for _, l := range e.State.Span.OwnLogs {
@@ -153,6 +162,25 @@ func convertSpan(e stack_backend.Event) *trace_model_v1.Span {
 	}
 
 	return span
+}
+
+// spanKind maps the core's span kind onto OTLP. The core's zero value is
+// Internal, so OTLP's UNSPECIFIED is never emitted: the specification tells
+// consumers to treat it as INTERNAL anyway, and being explicit lets a reader
+// distinguish "internal" from "the producer forgot to set the kind".
+func spanKind(kind stack_backend.SpanKind) trace_model_v1.Span_SpanKind {
+	switch kind {
+	case stack_backend.SpanKindServer:
+		return trace_model_v1.Span_SPAN_KIND_SERVER
+	case stack_backend.SpanKindClient:
+		return trace_model_v1.Span_SPAN_KIND_CLIENT
+	case stack_backend.SpanKindProducer:
+		return trace_model_v1.Span_SPAN_KIND_PRODUCER
+	case stack_backend.SpanKindConsumer:
+		return trace_model_v1.Span_SPAN_KIND_CONSUMER
+	default:
+		return trace_model_v1.Span_SPAN_KIND_INTERNAL
+	}
 }
 
 // convertLog builds the OTLP log record from a log event (see convertSpan on

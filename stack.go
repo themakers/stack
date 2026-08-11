@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"os"
 	"reflect"
 	"runtime/debug"
 	"sync/atomic"
@@ -108,6 +110,20 @@ func Default(ctx context.Context) context.Context {
 	return With().Backend(stack_backend_text.New()).Apply(ctx)
 }
 
+// WithHostFields adds the host name as the semconv resource attribute
+// host.name. Read once, at option construction: the hostname does not change
+// within a process lifetime, and a failed lookup must not add an empty
+// attribute pretending the host is known.
+func WithHostFields() stack_backend.Option {
+	host, err := os.Hostname()
+	return stack_backend.OptionFunc(func(sb *stack_backend.Stack) {
+		if err != nil || host == "" {
+			return
+		}
+		sb.Options.ScopeAttrs = append(sb.Options.ScopeAttrs, F("host.name", host))
+	})
+}
+
 func WithVCSFields() stack_backend.Option {
 	info, ok := debug.ReadBuildInfo()
 	return stack_backend.OptionFunc(func(sb *stack_backend.Stack) {
@@ -150,13 +166,15 @@ func Span(ctx context.Context, opts ...stack_backend.Option) (context.Context, e
 	// logs, the error, and its stack trace. Clone makes a shallow copy, and
 	// these fields belong to this span, not to the chain. OwnLogs = nil (not
 	// an empty slice) — the first append allocates lazily.
+	//
+	// Kind and Links are reset for the same reason: a child of a SERVER span
+	// is not itself a server, and the parent's links describe the parent's
+	// causality, not this span's.
 	s.Span.OwnLogs = nil
 	s.Span.Error = nil
 	s.Span.ErrorStackTrace = nil
-
-	if s.Span.TraceID.IsZero() {
-		s.Span.TraceID = stack_backend.NewTraceID()
-	}
+	s.Span.Kind = stack_backend.SpanKindInternal
+	s.Span.Links = nil
 
 	s.Span.ParentSpanID = s.Span.ID
 	s.Span.ID = stack_backend.NewID()
@@ -169,6 +187,16 @@ func Span(ctx context.Context, opts ...stack_backend.Option) (context.Context, e
 
 	//> Apply options from arguments
 	stack_backend.Options(opts).ApplyToStack(s)
+
+	// Identity is finalized after the options: NewTrace/W3CTraceContext/TraceID
+	// rewrite it, so generating ids earlier would either be wasted work or —
+	// for NewTrace — leave the span with zero ids.
+	if s.Span.TraceID.IsZero() {
+		s.Span.TraceID = stack_backend.NewTraceID()
+	}
+	if s.Span.ID.IsZero() {
+		s.Span.ID = stack_backend.NewID()
+	}
 
 	var cancel context.CancelCauseFunc
 	if s.CloseContextWithSpan {
@@ -225,7 +253,10 @@ func Span(ctx context.Context, opts ...stack_backend.Option) (context.Context, e
 // ▐▙▄▄▖▝▚▄▞▘▝▚▄▞▘▝▚▄▞▘▗▄█▄▖▐▌  ▐▌▝▚▄▞▘
 //
 
-func log(ctx context.Context, level, name string, err error, st stack_backend.StackTrace, attrs ...A) {
+// log is the shared implementation of the logging API. failSpan tells whether
+// an error carried by this event marks the enclosing span as failed: a true
+// failure does, a handled one (see Transient) does not.
+func log(ctx context.Context, level, name string, err error, st stack_backend.StackTrace, failSpan bool, attrs ...A) {
 
 	var (
 		t             = time.Now()
@@ -241,7 +272,7 @@ func log(ctx context.Context, level, name string, err error, st stack_backend.St
 	// may be used from multiple goroutines. Level/Error are stored as SpanLog
 	// fields rather than appended to attrs — this removes the variadic attrs
 	// slice reallocation on every log.
-	if s.Options.AddLogsToSpan || (err != nil) {
+	if s.Options.AddLogsToSpan || (err != nil && failSpan) {
 		s.LockState()
 		if s.Options.AddLogsToSpan {
 			s.Span.OwnLogs = append(s.Span.OwnLogs, stack_backend.SpanLog{
@@ -252,7 +283,7 @@ func log(ctx context.Context, level, name string, err error, st stack_backend.St
 				Attrs: attrs,
 			})
 		}
-		if err != nil && s.Span.Error == nil {
+		if err != nil && failSpan && s.Span.Error == nil {
 			s.Span.Error = err
 			s.Span.ErrorStackTrace = st
 		}
@@ -275,7 +306,10 @@ func log(ctx context.Context, level, name string, err error, st stack_backend.St
 		},
 	}
 
-	if err != nil {
+	// KindError marks a genuine failure and is used for backend routing
+	// (MuxBackendRule.Kinds), so a handled error must not raise it — see
+	// Transient.
+	if err != nil && failSpan {
 		e.Kind |= stack_backend.KindError
 	}
 
@@ -283,34 +317,53 @@ func log(ctx context.Context, level, name string, err error, st stack_backend.St
 }
 
 func Log(ctx context.Context, level, name string, attrs ...A) {
-	log(ctx, level, name, nil, nil, attrs...)
+	log(ctx, level, name, nil, nil, true, attrs...)
 }
 
 func Debug(ctx context.Context, name string, attrs ...A) {
-	log(ctx, stack_backend.LevelDebug, name, nil, nil, attrs...)
+	log(ctx, stack_backend.LevelDebug, name, nil, nil, true, attrs...)
 }
 
 func Info(ctx context.Context, name string, attrs ...A) {
-	log(ctx, stack_backend.LevelInfo, name, nil, nil, attrs...)
+	log(ctx, stack_backend.LevelInfo, name, nil, nil, true, attrs...)
 }
 
 func Warn(ctx context.Context, name string, attrs ...A) {
-	log(ctx, stack_backend.LevelWarn, name, nil, nil, attrs...)
+	log(ctx, stack_backend.LevelWarn, name, nil, nil, true, attrs...)
 }
 
 func Error(ctx context.Context, name string, err error, attrs ...A) error {
-	var trace stack_backend.StackTrace
-	if err == nil {
-		trace = stack_backend.Stacktrace(0)
-	} else if traced, ok := errors.AsType[errorWithStackTrace](err); ok {
-		trace = traced.StackTrace()
-	} else {
-		trace = stack_backend.Stacktrace(0)
-		err = &tracedError{cause: err, trace: trace}
-	}
-
-	log(ctx, stack_backend.LevelError, name, err, trace, attrs...)
+	err, trace := traced(err)
+	log(ctx, stack_backend.LevelError, name, err, trace, true, attrs...)
 	return err
+}
+
+// Transient reports an error that has been handled — a retry, a fallback, a
+// degraded path — at warn level. The error keeps full fidelity (stack trace,
+// the error attribute in OTLP), but the enclosing span is NOT marked as
+// failed: the operation has not failed, so painting the trace red would make
+// "show me broken traces" useless.
+//
+// Use Error when the operation did fail. The decision belongs here, at the
+// call site: no one up the stack can tell a retried attempt from a real
+// failure.
+func Transient(ctx context.Context, name string, err error, attrs ...A) error {
+	err, trace := traced(err)
+	log(ctx, stack_backend.LevelWarn, name, err, trace, false, attrs...)
+	return err
+}
+
+// traced attaches a stack trace to the error, reusing the one captured at the
+// original error site when it is already there.
+func traced(err error) (error, stack_backend.StackTrace) {
+	if err == nil {
+		return nil, stack_backend.Stacktrace(1)
+	} else if withTrace, ok := errors.AsType[errorWithStackTrace](err); ok {
+		return err, withTrace.StackTrace()
+	} else {
+		trace := stack_backend.Stacktrace(1)
+		return &tracedError{cause: err, trace: trace}, trace
+	}
 }
 
 func TLog(ctx context.Context, typed any) {
@@ -361,7 +414,47 @@ func TLog(ctx context.Context, typed any) {
 		})
 	}
 
-	log(ctx, stack_backend.LevelInfo, fullName, nil, nil, attrs...)
+	log(ctx, stack_backend.LevelInfo, fullName, nil, nil, true, attrs...)
+}
+
+//
+// ▗▄▄▄▖▗▄▄▖  ▗▄▖  ▗▄▄▖▗▄▄▄▖  ▗▄▄▖ ▗▄▖ ▗▖  ▗▖▗▄▄▄▖▗▄▄▄▖▗▖  ▗▖▗▄▄▄▖
+//   █  ▐▌ ▐▌▐▌ ▐▌▐▌   ▐▌    ▐▌   ▐▌ ▐▌▐▛▚▖▐▌  █  ▐▌    ▝▚▞▘   █
+//   █  ▐▛▀▚▖▐▛▀▜▌▐▌   ▐▛▀▀▘ ▐▌   ▐▌ ▐▌▐▌ ▝▜▌  █  ▐▛▀▀▘  ▐▌    █
+//   █  ▐▌ ▐▌▐▌ ▐▌▝▚▄▄▖▐▙▄▄▖ ▝▚▄▄▖▝▚▄▞▘▐▌  ▐▌  █  ▐▙▄▄▖▗▞▘▝▚▖  █
+//
+
+// ExportTraceparent writes the current span into the W3C traceparent header,
+// so the callee continues the same trace. Call it after stack.Span, otherwise
+// the header will point at the caller's span instead of the outbound-request
+// one.
+//
+// No-op when there is no span in the context: an invalid all-zero traceparent
+// is worse than none — the receiving side would start a broken trace.
+//
+// connect-go exposes the outbound headers as an http.Header
+// (connect.Request.Header()), so the same function covers both plain HTTP and
+// connect clients.
+func ExportTraceparent(ctx context.Context, h http.Header) {
+	if h == nil {
+		return
+	}
+
+	s := stack_backend.Get(ctx)
+	tp := stack_backend.FormatW3CTraceParent(s.Span.TraceID, s.Span.ID)
+	if tp == "" {
+		return
+	}
+
+	h.Set(stack_backend.TraceParentHeaderName(), tp)
+}
+
+// TraceContext returns the current span's identifiers — for storing them
+// alongside a queued item, so the worker that picks it up can Link back to the
+// trace that produced it. Zero values mean there is no span in the context.
+func TraceContext(ctx context.Context) (stack_backend.TraceID, stack_backend.ID) {
+	s := stack_backend.Get(ctx)
+	return s.Span.TraceID, s.Span.ID
 }
 
 //
