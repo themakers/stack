@@ -1,6 +1,7 @@
 package stack_backend_otel
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -53,8 +54,16 @@ func otlpValue(v stack_backend.Value) *common_model_v1.AnyValue {
 			return otlpStr(err.Error())
 		}
 		return otlpStr("")
-	default:
-		return otlpStr(fmt.Sprint(v.Any()))
+
+	default: // FIXME: Shall we introduce recursive KVList for structs and maps? (if applicable as per spec)
+		// Structs, maps and slices become a JSON string attribute — the same
+		// shape the json backend produces (Value.MarshalJSON), so downstream
+		// consumers can parse the value instead of scraping fmt.Sprint output.
+		if data, err := json.Marshal(v.Any()); err == nil {
+			return otlpStr(string(data))
+		} else {
+			return otlpStr(fmt.Sprint(v.Any()))
+		}
 	}
 }
 
