@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	trace_model_v1 "go.opentelemetry.io/proto/otlp/trace/v1"
 
@@ -134,5 +135,96 @@ func TestHostNameInResource(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("host.name must be exported as a resource attribute")
+	}
+}
+
+// A span recorded after the fact (imported from a client) keeps its own ids,
+// times and resource; its child and a LogAt record inside it keep theirs, and
+// the importing span is not failed by an imported error record.
+func TestImportedSpanAndLogAt(t *testing.T) {
+	sink := &fakeSink{}
+	ctx := stack.With().Backend(stack_backend_otel.New(sink)).ServiceName("server").Apply(context.Background())
+
+	reqCtx, reqDone := stack.Span(ctx, stack.With().Name("request"))
+
+	traceID := stack_backend.NewTraceID()
+	spanID := stack_backend.NewID()
+	parentID := stack_backend.NewID()
+	start := time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)
+	end := start.Add(1500 * time.Millisecond)
+	logAt := start.Add(700 * time.Millisecond)
+
+	cctx, done := stack.Span(reqCtx, stack.With().
+		Name("client.join").
+		ServiceName("web").
+		TraceID(traceID.Bytes()).
+		ParentSpanID(parentID.Bytes()).
+		SpanID(spanID.Bytes()).
+		StartTime(start).
+		EndTime(end))
+	stack.LogAt(cctx, logAt, stack_backend.LevelError, "client error", errors.New("boom"))
+	//> A child of an imported span does not inherit its fixed end.
+	_, childDone := stack.Span(cctx, stack.With().Name("child"))
+	childDone()
+	done()
+	reqDone()
+
+	spans := map[string]*trace_model_v1.Span{}
+	services := map[string]string{}
+	for _, td := range sink.traces {
+		for _, rs := range td.ResourceSpans {
+			svc := ""
+			for _, a := range rs.Resource.Attributes {
+				if a.Key == "service.name" {
+					svc = a.Value.GetStringValue()
+				}
+			}
+			for _, ss := range rs.ScopeSpans {
+				for _, s := range ss.Spans {
+					spans[s.Name] = s
+					services[s.Name] = svc
+				}
+			}
+		}
+	}
+	imp := spans["client.join"]
+	if imp == nil {
+		t.Fatalf("imported span not exported: %v", spans)
+	}
+	if string(imp.TraceId) != string(traceID.Bytes()) || string(imp.SpanId) != string(spanID.Bytes()) ||
+		string(imp.ParentSpanId) != string(parentID.Bytes()) {
+		t.Fatal("imported span identity changed")
+	}
+	if imp.StartTimeUnixNano != uint64(start.UnixNano()) || imp.EndTimeUnixNano != uint64(end.UnixNano()) {
+		t.Fatalf("imported span times: %d..%d", imp.StartTimeUnixNano, imp.EndTimeUnixNano)
+	}
+	if services["client.join"] != "web" || services["request"] != "server" {
+		t.Fatalf("resources: %v", services)
+	}
+	child := spans["child"]
+	if child == nil || string(child.ParentSpanId) != string(spanID.Bytes()) || child.EndTimeUnixNano <= uint64(end.UnixNano()) {
+		t.Fatalf("child of imported span: %+v", child)
+	}
+	if req := spans["request"]; req.Status != nil && req.Status.Code == trace_model_v1.Status_STATUS_CODE_ERROR {
+		t.Fatal("LogAt must not fail the importing span")
+	}
+
+	var found bool
+	for _, ld := range sink.logs {
+		for _, rl := range ld.ResourceLogs {
+			for _, sl := range rl.ScopeLogs {
+				for _, r := range sl.LogRecords {
+					if r.Body.GetStringValue() == "client error" {
+						found = true
+						if r.TimeUnixNano != uint64(logAt.UnixNano()) || string(r.SpanId) != string(spanID.Bytes()) {
+							t.Fatalf("LogAt record: time %d span %x", r.TimeUnixNano, r.SpanId)
+						}
+					}
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("LogAt record not exported")
 	}
 }

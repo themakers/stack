@@ -162,6 +162,38 @@ func (options Options) ParentSpanID(id []byte) Options {
 	}))
 }
 
+// SpanID sets the span's own id — for recording a span that was created
+// elsewhere (e.g. imported from a client), whose id other spans already
+// reference as their parent. Zero id is ignored.
+func (options Options) SpanID(id []byte) Options {
+	return append(options, OptionFunc(func(s *Stack) {
+		if !ID(id).IsZero() {
+			s.Span.ID = ID(id)
+		}
+	}))
+}
+
+// StartTime sets the span start instead of the moment Span() is called — for
+// recording a span that happened elsewhere. Zero time is ignored.
+func (options Options) StartTime(t time.Time) Options {
+	return append(options, OptionFunc(func(s *Stack) {
+		if !t.IsZero() {
+			s.Span.Time = t
+		}
+	}))
+}
+
+// EndTime fixes the span end: done() keeps it instead of stamping the moment
+// it is called. Together with StartTime and SpanID it records a finished
+// span that happened elsewhere. Zero time is ignored.
+func (options Options) EndTime(t time.Time) Options {
+	return append(options, OptionFunc(func(s *Stack) {
+		if !t.IsZero() {
+			s.Span.EndTime = t
+		}
+	}))
+}
+
 func (options Options) W3CTraceContext(traceparent, tracestate string) Options {
 	return append(options, applyW3C(traceparent))
 }

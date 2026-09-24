@@ -175,6 +175,9 @@ func Span(ctx context.Context, opts ...stack_backend.Option) (context.Context, e
 	s.Span.ErrorStackTrace = nil
 	s.Span.Kind = stack_backend.SpanKindInternal
 	s.Span.Links = nil
+	// The end belongs to this span too: a fixed EndTime (option EndTime) of
+	// the parent must not end the child.
+	s.Span.EndTime = time.Time{}
 
 	s.Span.ParentSpanID = s.Span.ID
 	s.Span.ID = stack_backend.NewID()
@@ -233,7 +236,9 @@ func Span(ctx context.Context, opts ...stack_backend.Option) (context.Context, e
 		if cause0 != nil && s.Span.Error == nil {
 			s.Span.Error = cause0
 		}
-		s.Span.EndTime = time.Now()
+		if s.Span.EndTime.IsZero() {
+			s.Span.EndTime = time.Now()
+		}
 		s.UnlockState()
 
 		// The backend gets a snapshot (Clone copies under the lock): if another
@@ -256,13 +261,17 @@ func Span(ctx context.Context, opts ...stack_backend.Option) (context.Context, e
 // log is the shared implementation of the logging API. failSpan tells whether
 // an error carried by this event marks the enclosing span as failed: a true
 // failure does, a handled one (see Transient) does not.
-func log(ctx context.Context, level, name string, err error, st stack_backend.StackTrace, failSpan bool, attrs ...A) {
+func log(ctx context.Context, at time.Time, level, name string, err error, st stack_backend.StackTrace, failSpan bool, attrs ...A) {
 
 	var (
-		t             = time.Now()
+		t             = at
 		s             = stack_backend.Get(ctx)
 		_, file, line = stack_backend.Operation(1)
 	)
+
+	if t.IsZero() {
+		t = time.Now()
+	}
 
 	if level == stack_backend.LevelError && err == nil {
 		err = errors.New(name)
@@ -317,24 +326,24 @@ func log(ctx context.Context, level, name string, err error, st stack_backend.St
 }
 
 func Log(ctx context.Context, level, name string, attrs ...A) {
-	log(ctx, level, name, nil, nil, true, attrs...)
+	log(ctx, time.Time{}, level, name, nil, nil, true, attrs...)
 }
 
 func Debug(ctx context.Context, name string, attrs ...A) {
-	log(ctx, stack_backend.LevelDebug, name, nil, nil, true, attrs...)
+	log(ctx, time.Time{}, stack_backend.LevelDebug, name, nil, nil, true, attrs...)
 }
 
 func Info(ctx context.Context, name string, attrs ...A) {
-	log(ctx, stack_backend.LevelInfo, name, nil, nil, true, attrs...)
+	log(ctx, time.Time{}, stack_backend.LevelInfo, name, nil, nil, true, attrs...)
 }
 
 func Warn(ctx context.Context, name string, attrs ...A) {
-	log(ctx, stack_backend.LevelWarn, name, nil, nil, true, attrs...)
+	log(ctx, time.Time{}, stack_backend.LevelWarn, name, nil, nil, true, attrs...)
 }
 
 func Error(ctx context.Context, name string, err error, attrs ...A) error {
 	err, trace := traced(err)
-	log(ctx, stack_backend.LevelError, name, err, trace, true, attrs...)
+	log(ctx, time.Time{}, stack_backend.LevelError, name, err, trace, true, attrs...)
 	return err
 }
 
@@ -349,8 +358,17 @@ func Error(ctx context.Context, name string, err error, attrs ...A) error {
 // failure.
 func Transient(ctx context.Context, name string, err error, attrs ...A) error {
 	err, trace := traced(err)
-	log(ctx, stack_backend.LevelWarn, name, err, trace, false, attrs...)
+	log(ctx, time.Time{}, stack_backend.LevelWarn, name, err, trace, false, attrs...)
 	return err
+}
+
+// LogAt records an event that happened elsewhere at time t (e.g. reported by
+// a client): the record keeps the given time and level and err (nil for
+// non-error levels). It does not mark the enclosing span as failed and does
+// not raise KindError: the reporting code path has not failed — the reported
+// event is data. Its own failure, if any, is the reporter's span status.
+func LogAt(ctx context.Context, t time.Time, level, name string, err error, attrs ...A) {
+	log(ctx, t, level, name, err, nil, false, attrs...)
 }
 
 // traced attaches a stack trace to the error, reusing the one captured at the
@@ -414,7 +432,7 @@ func TLog(ctx context.Context, typed any) {
 		})
 	}
 
-	log(ctx, stack_backend.LevelInfo, fullName, nil, nil, true, attrs...)
+	log(ctx, time.Time{}, stack_backend.LevelInfo, fullName, nil, nil, true, attrs...)
 }
 
 //
